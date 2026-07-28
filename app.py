@@ -31,10 +31,10 @@ df = load_data()
 # =====================================================================
 def parse_student_record(text):
     # 패턴 예시: 국어 (3단위/1등급) 또는 수학 4단위 2등급 등 유연한 매칭
-    pattern = re.compile(r'([가-힣]+)\s*$?(\d+)\s*단위\s*[\s/,\-_]*\s*(\d+)\s*등급$?')
+    pattern = re.compile(r'([가-힣]+)\s*\(?(\d+)\s*단위\s*[\s/,\-_]*\s*(\d+)\s*등급\)?')
     matches = pattern.findall(text)
     
-### subjects = []
+    subjects = []
     total_rc = 0
     total_c = 0
     
@@ -52,7 +52,7 @@ def parse_student_record(text):
 # =====================================================================
 st.set_page_config(page_title="AI 입시 컨설팅 시스템", layout="centered")
 
-### st.markdown("""
+st.markdown("""
     <style>
     .main-title {font-size: 32px; font-weight: bold; color: #1E3A8A; text-align: center; margin-bottom: 5px;}
     .sub-title {font-size: 16px; color: #4B5563; text-align: center; margin-bottom: 30px;}
@@ -67,7 +67,7 @@ st.set_page_config(page_title="AI 입시 컨설팅 시스템", layout="centered"
 # ---------------------------------------------------------------------
 st.markdown('<div class="step-box"><b>[STEP 1] 목표 대학 및 전형 선택</b></div>', unsafe_allow_html=True)
 
-### col1, col2 = st.columns(2)
+col1, col2 = st.columns(2)
 with col1:
     region_list = sorted(df["지역"].unique())
     selected_region = st.selectbox("지역 선택", region_list)
@@ -102,7 +102,7 @@ sample_record_text = """[교과학습발달상황]
 
 use_sample = st.checkbox("파일이 없는 경우 샘플 데이터로 테스트하기")
 
-### record_text = ""
+record_text = ""
 if uploaded_file is not None:
     record_text = uploaded_file.read().decode("utf-8")
 elif use_sample:
@@ -116,7 +116,7 @@ if record_text:
     if st.button("학생부 정밀 분석 시작", type="primary"):
         my_gpa, parsed_sub = parse_student_record(record_text)
         
-### cut_50 = target_row["50%컷"]
+        cut_50 = target_row["50%컷"]
         cut_70 = target_row["70%컷"]
         req_subjects = [s.strip() for s in target_row["필수과목"].split(",")]
         
@@ -200,7 +200,7 @@ if record_text:
             </div>
         </div>
         
-### <!-- 브라우저 인쇄 트리거 버튼 -->
+        <!-- 브라우저 인쇄 트리거 버튼 -->
         <div style="text-align: center; margin-top: 20px;">
             <button onclick="window.print()" style="padding: 12px 30px; background-color: #1E3A8A; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
                 🖨️ PDF 리포트 인쇄 및 저장하기
@@ -208,5 +208,5 @@ if record_text:
         </div>
         """
         
-### st.markdown("### 📊 분석 리포트")
+        st.markdown("### 📊 분석 리포트")
         st.components.v1.html(report_html, height=750, scrolling=True)
