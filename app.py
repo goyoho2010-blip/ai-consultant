@@ -3,14 +3,30 @@ import pandas as pd
 import re
 
 # =====================================================================
-# 1. 데이터 로드 및 자동 생성 (에러 방지)
+# 1. 데이터 로드 및 열 이름 유연한 처리
 # =====================================================================
 def load_data():
     try:
         # CSV 파일 읽기
         df = pd.read_csv("2026 수시정리.csv", encoding="utf-8-sig")
-        # 🔥 에러 방지 핵심: 지역, 대학, 학과 열에 빈칸(NaN)이 있는 쓸모없는 행을 완전히 삭제
+        
+        # 열 이름 표준화 (실제 파일 이름 -> 코드 내부용 이름)
+        column_mapping = {
+            "대학명": "대학",
+            "학과명": "학과",
+            "전형명": "전형",
+            "2025등급컷2": "50%컷",
+            "2025등급컷": "70%컷"
+        }
+        df = df.rename(columns=column_mapping)
+        
+        # 필수 열 존재 여부 체크 후 없는 열은 기본값 추가
+        if "필수과목" not in df.columns:
+            df["필수과목"] = ""
+            
+        # 주요 열에 빈칸이 있는 행 제거
         df = df.dropna(subset=["지역", "대학", "학과"])
+        
     except FileNotFoundError:
         # 파일이 없을 경우 자동 생성할 샘플 데이터
         sample_data = {
@@ -24,6 +40,7 @@ def load_data():
         }
         df = pd.DataFrame(sample_data)
         df.to_csv("2026 수시정리.csv", index=False, encoding="utf-8-sig")
+        
     return df
 
 df = load_data()
@@ -71,7 +88,6 @@ st.markdown('<div class="step-box"><b>[STEP 1] 목표 대학 및 전형 선택</
 
 col1, col2 = st.columns(2)
 with col1:
-    # 🔥 에러 방지 핵심: astype(str)을 추가하여 모두 문자로 인식하게 만들어 정렬 에러 원천 차단
     region_list = sorted(df["지역"].astype(str).unique())
     selected_region = st.selectbox("지역 선택", region_list)
 
@@ -82,11 +98,13 @@ with col2:
     dept_list = sorted(df[(df["지역"] == selected_region) & (df["대학"] == selected_univ)]["학과"].astype(str).unique())
     selected_dept = st.selectbox("학과 선택", dept_list)
 
-    target_row = df[(df["지역"] == selected_region) & (df["대학"] == selected_univ) & (df["학과"] == selected_dept)].iloc[0]
+    target_df = df[(df["지역"] == selected_region) & (df["대학"] == selected_univ) & (df["학과"] == selected_dept)]
     
-    # 전형이 비어있을 수도 있으므로 강제로 문자로 변환하여 넣음
-    selected_type_value = str(target_row["전형"]) if pd.notna(target_row["전형"]) else "전형 정보 없음"
-    selected_type = st.text_input("전형명", value=selected_type_value, disabled=True)
+    # 동일 대학/학과에 여러 전형이 있을 수 있으므로 선택 가능하게 처리
+    type_list = sorted(target_df["전형"].astype(str).unique())
+    selected_type = st.selectbox("전형 선택", type_list)
+    
+    target_row = target_df[target_df["전형"] == selected_type].iloc[0]
 
 # ---------------------------------------------------------------------
 # [STEP 2] 학생부 업로드 대기 화면
@@ -122,11 +140,18 @@ if record_text:
     if st.button("학생부 정밀 분석 시작", type="primary"):
         my_gpa, parsed_sub = parse_student_record(record_text)
         
-        # 컷 데이터가 비어있을(NaN) 경우를 대비한 기본값 처리
-        cut_50 = target_row["50%컷"] if pd.notna(target_row["50%컷"]) else 9.0
-        cut_70 = target_row["70%컷"] if pd.notna(target_row["70%컷"]) else 9.0
+        # 컷 데이터 숫자로 안전 변환
+        try:
+            cut_50 = float(target_row["50%컷"])
+        except (ValueError, TypeError):
+            cut_50 = 9.0
+            
+        try:
+            cut_70 = float(target_row["70%컷"])
+        except (ValueError, TypeError):
+            cut_70 = 9.0
         
-        # 필수과목 문자열 파싱 (비어있을 경우 빈 리스트 반환)
+        # 필수과목 문자열 파싱
         raw_subjects = str(target_row["필수과목"]) if pd.notna(target_row["필수과목"]) else ""
         req_subjects = [s.strip() for s in raw_subjects.split(",")] if raw_subjects else []
         
@@ -134,7 +159,7 @@ if record_text:
         passed_subjects = []
         missing_subjects = []
         for req in req_subjects:
-            if not req:  # 빈 문자열 패스
+            if not req:
                 continue
             if any(req in sub["과목"] for sub in parsed_sub):
                 passed_subjects.append(req)
@@ -142,10 +167,10 @@ if record_text:
                 missing_subjects.append(req)
                 
         # 합격 예측 로직
-        if my_gpa <= cut_50:
+        if my_gpa <= cut_50 and cut_50 != 9.0:
             status = "안정 (합격 유력)"
             color = "#10B981"
-        elif my_gpa <= cut_70:
+        elif my_gpa <= cut_70 and cut_70 != 9.0:
             status = "적정 (경쟁력 있음)"
             color = "#3B82F6"
         else:
@@ -168,7 +193,7 @@ if record_text:
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">지원 구분</th>
                     <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_univ} - {selected_dept}</td>
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">적용 전형</th>
-                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_type_value}</td>
+                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_type}</td>
                 </tr>
                 <tr>
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">산출 내신 등급</th>
@@ -223,6 +248,5 @@ if record_text:
         
         st.markdown("### 📊 분석 리포트")
         st.components.v1.html(report_html, height=750, scrolling=True)
-
       
       
