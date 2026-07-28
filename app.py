@@ -9,6 +9,8 @@ def load_data():
     try:
         # CSV 파일 읽기
         df = pd.read_csv("2026 수시정리.csv", encoding="utf-8-sig")
+        # 🔥 에러 방지 핵심: 지역, 대학, 학과 열에 빈칸(NaN)이 있는 쓸모없는 행을 완전히 삭제
+        df = df.dropna(subset=["지역", "대학", "학과"])
     except FileNotFoundError:
         # 파일이 없을 경우 자동 생성할 샘플 데이터
         sample_data = {
@@ -69,18 +71,22 @@ st.markdown('<div class="step-box"><b>[STEP 1] 목표 대학 및 전형 선택</
 
 col1, col2 = st.columns(2)
 with col1:
-    region_list = sorted(df["지역"].unique())
+    # 🔥 에러 방지 핵심: astype(str)을 추가하여 모두 문자로 인식하게 만들어 정렬 에러 원천 차단
+    region_list = sorted(df["지역"].astype(str).unique())
     selected_region = st.selectbox("지역 선택", region_list)
 
-    univ_list = sorted(df[df["지역"] == selected_region]["대학"].unique())
+    univ_list = sorted(df[df["지역"] == selected_region]["대학"].astype(str).unique())
     selected_univ = st.selectbox("대학 선택", univ_list)
 
 with col2:
-    dept_list = sorted(df[(df["지역"] == selected_region) & (df["대학"] == selected_univ)]["학과"].unique())
+    dept_list = sorted(df[(df["지역"] == selected_region) & (df["대학"] == selected_univ)]["학과"].astype(str).unique())
     selected_dept = st.selectbox("학과 선택", dept_list)
 
     target_row = df[(df["지역"] == selected_region) & (df["대학"] == selected_univ) & (df["학과"] == selected_dept)].iloc[0]
-    selected_type = st.text_input("전형명", value=target_row["전형"], disabled=True)
+    
+    # 전형이 비어있을 수도 있으므로 강제로 문자로 변환하여 넣음
+    selected_type_value = str(target_row["전형"]) if pd.notna(target_row["전형"]) else "전형 정보 없음"
+    selected_type = st.text_input("전형명", value=selected_type_value, disabled=True)
 
 # ---------------------------------------------------------------------
 # [STEP 2] 학생부 업로드 대기 화면
@@ -116,14 +122,20 @@ if record_text:
     if st.button("학생부 정밀 분석 시작", type="primary"):
         my_gpa, parsed_sub = parse_student_record(record_text)
         
-        cut_50 = target_row["50%컷"]
-        cut_70 = target_row["70%컷"]
-        req_subjects = [s.strip() for s in target_row["필수과목"].split(",")]
+        # 컷 데이터가 비어있을(NaN) 경우를 대비한 기본값 처리
+        cut_50 = target_row["50%컷"] if pd.notna(target_row["50%컷"]) else 9.0
+        cut_70 = target_row["70%컷"] if pd.notna(target_row["70%컷"]) else 9.0
+        
+        # 필수과목 문자열 파싱 (비어있을 경우 빈 리스트 반환)
+        raw_subjects = str(target_row["필수과목"]) if pd.notna(target_row["필수과목"]) else ""
+        req_subjects = [s.strip() for s in raw_subjects.split(",")] if raw_subjects else []
         
         # 필수과목 이수 여부 체크
         passed_subjects = []
         missing_subjects = []
         for req in req_subjects:
+            if not req:  # 빈 문자열 패스
+                continue
             if any(req in sub["과목"] for sub in parsed_sub):
                 passed_subjects.append(req)
             else:
@@ -156,13 +168,13 @@ if record_text:
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">지원 구분</th>
                     <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_univ} - {selected_dept}</td>
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">적용 전형</th>
-                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_type}</td>
+                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center;">{selected_type_value}</td>
                 </tr>
                 <tr>
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">산출 내신 등급</th>
                     <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #EF4444; font-size: 18px;">{my_gpa} 등급</td>
                     <th style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-weight: bold; color: #1E3A8A;">전년도 합격 컷</th>
-                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-size: 13px;">50% 컷: {cut_50} | 70% 컷: {cut_70}</td>
+                    <td style="border: 1px solid #D1D5DB; padding: 10px; text-align: center; font-size: 13px;">50% 컷: {cut_50 if cut_50 != 9.0 else '정보없음'} | 70% 컷: {cut_70 if cut_70 != 9.0 else '정보없음'}</td>
                 </tr>
             </table>
 
@@ -187,6 +199,7 @@ if record_text:
                 <tbody>
                     {"".join([f"<tr><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center; color: #10B981; font-weight: bold;'>이수 완료</td><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center;'>{sub}</td><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center; color: #10B981;'>★ 충족</td></tr>" for sub in passed_subjects])}
                     {"".join([f"<tr><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center; color: #EF4444; font-weight: bold;'>미이수 과목</td><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center;'>{sub}</td><td style='border: 1px solid #D1D5DB; padding: 10px; text-align: center; color: #EF4444;'>⚠️ 미충족</td></tr>" for sub in missing_subjects])}
+                    {"<tr><td colspan='3' style='border: 1px solid #D1D5DB; padding: 10px; text-align: center; color: #6B7280;'>설정된 필수 과목이 없습니다.</td></tr>" if not req_subjects else ""}
                 </tbody>
             </table>
 
@@ -210,3 +223,6 @@ if record_text:
         
         st.markdown("### 📊 분석 리포트")
         st.components.v1.html(report_html, height=750, scrolling=True)
+
+      
+      
