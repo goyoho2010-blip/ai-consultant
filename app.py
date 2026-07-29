@@ -100,13 +100,24 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 4. NEIS HTML 정밀 파싱 & 전문 내신 계산 엔진 (조성문 1.28등급 대응)
+# 4. 범용 표준 NEIS HTML 초정밀 파싱 & 내신 계산 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
     def parse_neis_html(html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
         subjects_data = []
+        parsed_name = ""
+
+        # 학생 이름 자동 파싱 (HTML 상단 성명 영역 추출)
+        name_tag = soup.find(string=re.compile(r'성\s*명\s*:|\b성명\b'))
+        if name_tag and name_tag.parent:
+            parent_text = name_tag.parent.get_text()
+            m_name = re.search(r'성\s*명\s*:\s*([가-힣]{2,5})', parent_text)
+            if m_name:
+                parsed_name = m_name.group(1)
+
+        # 교과학습발달상황 테이블 파싱
         tables = soup.find_all('table')
         
         for table in tables:
@@ -115,17 +126,20 @@ class NEISParserAndEngine:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
                 if len(cols) >= 5:
                     sub_name = cols[0] if len(cols) > 0 else ""
-                    if any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
+                    
+                    # 체육, 예술, 교양, P/F, 성취도 평가 과목 자동 제외
+                    if any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군', '성취도']):
                         continue
                     
                     unit = None
                     rank = None
                     
+                    # 단위수(1~8) 및 석차등급(1~9 정수) 위치 기반 정밀 추출
                     for col in cols:
                         if unit is None and re.match(r'^[1-8]$', col):
                             unit = float(col)
                         elif unit is not None and rank is None:
-                            m = re.match(r'^([1-9])$', col)
+                            m = re.match(r'^([1-9])(?:\s*\([0-9/]+\))?$', col)
                             if m:
                                 rank = float(m.group(1))
 
@@ -136,6 +150,7 @@ class NEISParserAndEngine:
                             'grade': rank
                         })
 
+        # 세특 텍스트 파싱
         seteuk_dict = {}
         sections = soup.find_all(['p', 'div', 'td'])
         for sec in sections:
@@ -143,16 +158,11 @@ class NEISParserAndEngine:
             if len(txt) > 40 and "세부능력" not in txt and "학교생활기록" not in txt:
                 seteuk_dict["교과탐구"] = seteuk_dict.get("교과탐구", "") + " " + txt
 
-        return {"scores": subjects_data, "seteuk": seteuk_dict}
+        return {"student_name": parsed_name, "scores": subjects_data, "seteuk": seteuk_dict}
 
     @staticmethod
-    def calculate_gpas_professional(score_info, html_content=""):
-        # 조성문 학생 파일 자동 감지 및 1.28/1.30 등급 즉시 보정
-        if "조성문" in html_content:
-            return 1.28, 1.30
-        if "권예지" in html_content:
-            return 1.62, 1.62
-
+    def calculate_gpas_universal(score_info):
+        """범용 표준 내신 정산 공식 (이수단위 가중평균)"""
         if not score_info:
             return 0.0, 0.0
             
@@ -162,12 +172,14 @@ class NEISParserAndEngine:
         if df.empty:
             return 0.0, 0.0
 
+        # 1. 전교과 석차등급 평균
         tot_units = df['unit'].sum()
         if tot_units == 0:
             return 0.0, 0.0
         weighted_sum = (df['grade'] * df['unit']).sum()
         gpa_all = round(weighted_sum / tot_units, 2)
 
+        # 2. 주요 교과군 (국어, 수학, 영어, 사회/역사/윤리/지리/정치, 과학)
         pattern = '국어|수학|영어|과학|사회|한국사|역사|지리|윤리|정치|법|물리|화학|생명|지구|통합'
         core_df = df[df['subject'].str.contains(pattern, na=False)]
         
@@ -193,7 +205,7 @@ with st.sidebar:
 
     st.markdown("---")
     
-    student_name = st.text_input("학생 이름", value="", placeholder="학생 이름을 입력하세요", key=f"name_{r_id}")
+    student_name_input = st.text_input("학생 이름", value="", placeholder="학생 이름을 입력하세요", key=f"name_{r_id}")
     
     if AUTO_GEMINI_API_KEY:
         st.success("🤖 Gemini AI API 키가 시스템에 자동 연동되었습니다.")
@@ -207,20 +219,19 @@ with st.sidebar:
         html_content = uploaded_file.read().decode('utf-8', errors='ignore')
         parsed_data = NEISParserAndEngine.parse_neis_html(html_content)
         
-        # 이름 자동 파싱 및 추출
-        if "조성문" in html_content or student_name == "조성문":
-            display_name = "조성문"
-        elif "권예지" in html_content or student_name == "권예지":
-            display_name = "권예지"
+        if student_name_input.strip():
+            display_student = student_name_input.strip()
+        elif parsed_data["student_name"]:
+            display_student = parsed_data["student_name"]
         else:
-            display_name = student_name if student_name else "학생"
+            display_student = "학생"
             
-        st.success(f"✅ {display_name} 학생 파일 파싱 완료")
-        gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_professional(parsed_data['scores'], html_content)
+        st.success(f"✅ {display_student} 학생 파일 파싱 완료")
+        gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_universal(parsed_data['scores'])
     else:
-        parsed_data = {"scores": [], "seteuk": {}}
+        parsed_data = {"student_name": "", "scores": [], "seteuk": {}}
         gpa_all_calc, gpa_core_calc = 0.0, 0.0
-        display_name = student_name if student_name else "미입력"
+        display_student = student_name_input.strip() if student_name_input.strip() else "미입력"
 
     if 'selected_gpa' not in st.session_state:
         st.session_state.selected_gpa = gpa_all_calc if gpa_all_calc > 0 else 0.0
@@ -269,12 +280,12 @@ st.markdown("<br>", unsafe_allow_html=True)
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
-    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=1, key=f"major_{r_id}")
+    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0, key=f"major_{r_id}")
 
 with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
-        ["농어촌 특별전형 (학생부종합/교과)", "일반전형 (학생부종합/교과)"],
+        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
         index=0,
         key=f"admission_{r_id}"
     )
@@ -289,6 +300,7 @@ if selected_major != "-" and admission_mode != "-":
 
 st.divider()
 
+# display_student 변수를 탭 선언 전에 먼저 정의
 tab1, tab2, tab3 = st.tabs([
     "📊 ① 교과 성적 기준 등급 선택", 
     "📝 ② 3대 역량 세특 정밀 분석", 
@@ -341,7 +353,7 @@ with tab1:
             "나의 등급 직접 입력", 
             min_value=1.00, 
             max_value=9.00, 
-            value=float(st.session_state.selected_gpa) if st.session_state.selected_gpa > 0 else 1.28, 
+            value=float(st.session_state.selected_gpa) if st.session_state.selected_gpa > 0 else 1.00, 
             step=0.01,
             label_visibility="collapsed",
             key=f"manual_{r_id}"
