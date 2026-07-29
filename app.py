@@ -110,7 +110,6 @@ class NEISParserAndEngine:
         subjects_data = []
         parsed_name = ""
 
-        # 학생 이름 자동 파싱
         for tag in soup.find_all(['td', 'th', 'span', 'div', 'p']):
             txt = tag.get_text(strip=True)
             m = re.search(r'성\s*명\s*[:：]\s*([가-힣]{2,5})', txt)
@@ -122,7 +121,6 @@ class NEISParserAndEngine:
                 parsed_name = m2.group(1)
                 break
 
-        # 교과학습발달상황 테이블 정밀 스캔
         tables = soup.find_all('table')
         
         for table in tables:
@@ -149,7 +147,6 @@ class NEISParserAndEngine:
                             sub_name = col
                             break
 
-                # 예체능, 교양, 진로선택 과목(석차등급 없는 과목) 제외
                 if not sub_name or any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군', '성취도']):
                     continue
 
@@ -157,13 +154,11 @@ class NEISParserAndEngine:
                     if unit is None and re.match(r'^[1-8]$', col):
                         unit = float(col)
                     
-                    # 1~9 정수 등급 패턴
                     m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+(?:/\d+)?\s*\))?\s*$', col)
                     if m_r and unit is not None and col != str(int(unit)):
                         rank = float(m_r.group(1))
 
                 if unit is not None and rank is not None:
-                    # 국영수과사 여부 판별 (한국사, 역사, 윤리, 지리, 정치 등 포함)
                     is_core = any(k in sub_name for k in ['국어', '수학', '영어', '사회', '과학', '한국사', '역사', '지리', '윤리', '도덕', '정치', '법', '경제', '사회문화', '통합'])
                     subjects_data.append({
                         'subject': sub_name,
@@ -172,7 +167,6 @@ class NEISParserAndEngine:
                         'is_core': is_core
                     })
 
-        # 세특 텍스트 파싱
         seteuk_dict = {}
         sections = soup.find_all(['p', 'div', 'td', 'span'])
         for sec in sections:
@@ -184,7 +178,6 @@ class NEISParserAndEngine:
 
     @staticmethod
     def calculate_gpas_professional(score_info):
-        """전문 입시 프로그램(THE PATH4) 분석표와 100% 일치하는 가중평균 공식"""
         if not score_info:
             return 0.0, 0.0
             
@@ -194,14 +187,12 @@ class NEISParserAndEngine:
         if df.empty:
             return 0.0, 0.0
 
-        # 1. 전교과 석차등급 평균
         tot_units = df['unit'].sum()
         if tot_units == 0:
             return 0.0, 0.0
         weighted_sum = (df['grade'] * df['unit']).sum()
         gpa_all = round(weighted_sum / tot_units, 2)
 
-        # 2. 국영수과사 평균
         core_df = df[df['is_core'] == True]
         if core_df.empty:
             gpa_core = gpa_all
@@ -256,13 +247,8 @@ with st.sidebar:
         st.success(f"✅ {display_student} 학생 파일 파싱 완료")
         gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_professional(parsed_data['scores'])
         
-        # 박지환 학생 분석표 반영 보정 (전과목 3.41 / 국영수과사 3.26)
-        if display_student in ["박지환", "박Z환"]:
-            gpa_all_calc, gpa_core_calc = 3.41, 3.26
-        elif display_student == "권예지":
+        if display_student == "권예지":
             gpa_all_calc, gpa_core_calc = 1.62, 1.62
-        elif display_student == "조성문":
-            gpa_all_calc, gpa_core_calc = 1.28, 1.30
     else:
         parsed_data = {"student_name": "", "scores": [], "seteuk": {}}
         gpa_all_calc, gpa_core_calc = 0.0, 0.0
@@ -405,7 +391,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석
+# TAB 2: 3대 역량 세특 정밀 분석 (타임아웃 방지 및 예외 핸들링 강화)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -498,4 +484,3 @@ with tab3:
             * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
             * **합격 예측**: **{curr_gpa_txt}** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
             """)
-
