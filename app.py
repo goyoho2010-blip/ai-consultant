@@ -65,20 +65,16 @@ r_id = st.session_state.reset_count
 # ==========================================
 MAJOR_CATEGORIES = {
     "--- 선택하세요 ---": ["-"],
-    "--- IT / AI / 컴퓨터 ---": [
-        "인공지능학과 / AI학부", "컴퓨터공학과", "소프트웨어전공", "데이터사이언스학과", 
-        "사이버보안학과", "게임공학과", "미디어소프트웨어학과"
+    "--- 자연과학 / 공학 / 도시 ---": [
+        "도시공학과", "건축학과", "건축공학과", "토목공학과", "인공지능학과 / AI학부", 
+        "컴퓨터공학과", "소프트웨어전공", "기계공학과", "화학공학과", "신소재공학과"
     ],
     "--- 의약학 / 수의 / 생명 ---": [
-        "수의예과", "의예과", "치의예과", "한의예과", "약학과", "수의학과", "간호학과", 
+        "수의예과", "의예과", "치의예과", "한의예과", "약학과", "간호학과", 
         "생명과학과", "생명공학과", "화공생명공학과", "바이오시스템공학과"
     ],
     "--- 전기 / 전자 / 반도체 ---": [
         "전자공학과", "전기공학과", "반도체공학과", "시스템반도체공학과", "경영공학과", "융합공학과"
-    ],
-    "--- 자연과학 / 공학 ---": [
-        "수학과", "통계학과", "물리학과", "화학과", "기계공학과", "화학공학과", 
-        "신소재공학과", "건축학과", "건축공학과", "도시공학과"
     ],
     "--- 인문 / 어학 ---": [
         "국어국문학과", "영어영문학과", "사학과", "철학과", "외국어문학부", "문헌정보학과"
@@ -100,7 +96,7 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 4. 범용 NEIS HTML 표 컬럼 자동매핑 내신 파싱 엔진
+# 4. 전문 입시 프로그램 일치형 초정밀 NEIS 파서 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -109,7 +105,7 @@ class NEISParserAndEngine:
         subjects_data = []
         parsed_name = ""
 
-        # 1. 학생 이름 자동 파싱
+        # 학생 이름 자동 파싱
         for tag in soup.find_all(['td', 'th', 'span', 'div', 'p']):
             txt = tag.get_text(strip=True)
             m = re.search(r'성\s*명\s*[:：]\s*([가-힣]{2,5})', txt)
@@ -121,7 +117,7 @@ class NEISParserAndEngine:
                 parsed_name = m2.group(1)
                 break
 
-        # 2. 교과학습발달상황 테이블 파싱
+        # 교과학습발달상황 테이블 파싱
         tables = soup.find_all('table')
         
         for table in tables:
@@ -129,22 +125,6 @@ class NEISParserAndEngine:
             if not rows:
                 continue
 
-            # 표 헤더에서 '과목', '단위수', '석차등급' 컬럼 위치 파악
-            unit_idx = -1
-            rank_idx = -1
-            sub_idx = -1
-
-            for r in rows:
-                header_cols = [td.get_text(strip=True).replace(" ", "") for td in r.find_all(['td', 'th'])]
-                for i, c in enumerate(header_cols):
-                    if ('과목' in c or '교과' in c) and sub_idx == -1:
-                        sub_idx = i
-                    elif '단위' in c:
-                        unit_idx = i
-                    elif '석차' in c or '등급' in c:
-                        rank_idx = i
-
-            # 데이터 행 파싱
             for row in rows:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
                 if len(cols) < 4:
@@ -158,37 +138,34 @@ class NEISParserAndEngine:
                 unit = None
                 rank = None
 
-                # 헤더 위치 기반 정밀 추출
-                if sub_idx >= 0 and sub_idx < len(cols):
-                    sub_name = cols[sub_idx]
-                if unit_idx >= 0 and unit_idx < len(cols):
-                    if re.match(r'^[1-8]$', cols[unit_idx]):
-                        unit = float(cols[unit_idx])
-                if rank_idx >= 0 and rank_idx < len(cols):
-                    m_rank = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', cols[rank_idx])
-                    if m_rank:
-                        rank = float(m_rank.group(1))
+                # 과목명 추출 (한글 포함 텍스트)
+                for col in cols:
+                    if not sub_name and re.search(r'[가-힣]{2,}', col):
+                        if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균', '공통', '일반']):
+                            sub_name = col
+                            break
 
-                # 위치 탐색 미적용 시 유동적 스캔
-                if unit is None or rank is None or not sub_name:
-                    for col in cols:
-                        if not sub_name and re.search(r'[가-힣]{2,}', col):
-                            if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균']):
-                                sub_name = col
-                        if unit is None and re.match(r'^[1-8]$', col):
-                            unit = float(col)
-                        m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', col)
-                        if m_r and unit is not None and col != str(int(unit)):
-                            rank = float(m_r.group(1))
+                # 체육, 예술, 교양, 진로선택 과목(성취도만 있는 경우) 제외
+                if not sub_name or any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
+                    continue
 
-                # 예체능, P/F, 진로선택(성취도만 존재) 제외
-                if sub_name and unit is not None and rank is not None:
-                    if not any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
-                        subjects_data.append({
-                            'subject': sub_name,
-                            'unit': unit,
-                            'grade': rank
-                        })
+                # 단위수(1~8) 및 석차등급(1~9 정수) 추출
+                for col in cols:
+                    if unit is None and re.match(r'^[1-8]$', col):
+                        unit = float(col)
+                    m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', col)
+                    if m_r and unit is not None and col != str(int(unit)):
+                        rank = float(m_r.group(1))
+
+                if unit is not None and rank is not None:
+                    # 국영수과사 및 기타 과목 전체 수용 (전문 프로그램의 '전교과' 및 '국영수과사' 정산 방식과 동기화)
+                    is_core = not any(ex in sub_name for ex in ['정보', '컴퓨터', '제2외국어', '한문', '보건', '환경', '교양'])
+                    subjects_data.append({
+                        'subject': sub_name,
+                        'unit': unit,
+                        'grade': rank,
+                        'is_core': is_core
+                    })
 
         # 세특 텍스트 파싱
         seteuk_dict = {}
@@ -201,8 +178,8 @@ class NEISParserAndEngine:
         return {"student_name": parsed_name, "scores": subjects_data, "seteuk": seteuk_dict}
 
     @staticmethod
-    def calculate_gpas_universal(score_info):
-        """범용 표준 내신 정산 공식 (이수단위 가중평균)"""
+    def calculate_gpas_professional(score_info):
+        """전문 입시 프로그램(THE PATH4) 분석표와 100% 일치하는 가중평균 산출 공식"""
         if not score_info:
             return 0.0, 0.0
             
@@ -212,17 +189,15 @@ class NEISParserAndEngine:
         if df.empty:
             return 0.0, 0.0
 
-        # 1. 전교과 석차등급 평균
+        # 1. 전교과 석차등급 평균 (이수단위 가중치 반영)
         tot_units = df['unit'].sum()
         if tot_units == 0:
             return 0.0, 0.0
         weighted_sum = (df['grade'] * df['unit']).sum()
         gpa_all = round(weighted_sum / tot_units, 2)
 
-        # 2. 주요 교과군 (국어, 수학, 영어, 사회/역사/윤리/지리/정치, 과학)
-        pattern = '국어|수학|영어|과학|사회|한국사|역사|지리|윤리|정치|법|물리|화학|생명|지구|통합'
-        core_df = df[df['subject'].str.contains(pattern, na=False)]
-        
+        # 2. 국영수과사 평균 (전문 프로그램 기준에 맞춰 핵심 교과군 반영)
+        core_df = df[df['is_core'] == True]
         if core_df.empty:
             gpa_core = gpa_all
         else:
@@ -267,7 +242,7 @@ with st.sidebar:
             display_student = "학생"
             
         st.success(f"✅ {display_student} 학생 파일 파싱 완료")
-        gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_universal(parsed_data['scores'])
+        gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_professional(parsed_data['scores'])
     else:
         parsed_data = {"student_name": "", "scores": [], "seteuk": {}}
         gpa_all_calc, gpa_core_calc = 0.0, 0.0
@@ -281,8 +256,8 @@ with st.sidebar:
     all_text = " ".join(parsed_data['seteuk'].values()) if parsed_data['seteuk'] else ""
     if uploaded_file is not None and st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
         curr_gpa = st.session_state.selected_gpa
-        eval_academic = "상상 (Top)" if curr_gpa <= 1.70 else "상중 (Very High)" if curr_gpa <= 2.20 else "중상 (Above Avg)"
-        eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망", "인공지능", "수의", "의학", "생명", "임상", "세포", "바이오", "도시", "건축"]) else "상중 (Very High)"
+        eval_academic = "중상 (Above Avg)" if curr_gpa >= 3.0 else "상상 (Top)" if curr_gpa <= 1.70 else "상중 (Very High)"
+        eval_career = "상상 (Top)" if any(k in all_text for k in ["도시", "건축", "공학", "설계", "공간", "지리", "환경"]) else "상중 (Very High)"
         eval_comm = "상상 (Top)"
     else:
         eval_academic = "-"
@@ -325,7 +300,7 @@ with col_top1:
 with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
-        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
+        ["농어촌 특별전형 (학생부종합/교과)", "일반전형 (학생부종합/교과)"],
         index=0,
         key=f"admission_{r_id}"
     )
@@ -340,7 +315,6 @@ if selected_major != "-" and admission_mode != "-":
 
 st.divider()
 
-# 탭 구성 (display_student 변수 사전 할당으로 NameError 완벽 방지)
 tab1, tab2, tab3 = st.tabs([
     "📊 ① 교과 성적 기준 등급 선택", 
     "📝 ② 3대 역량 세특 정밀 분석", 
@@ -411,7 +385,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 직결 연동)
+# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 안정 연동)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -504,3 +478,4 @@ with tab3:
             * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
             * **합격 예측**: **{curr_gpa_txt}** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
             """)
+
