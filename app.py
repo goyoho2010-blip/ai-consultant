@@ -52,17 +52,21 @@ AUTO_GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_AP
 if 'reset_count' not in st.session_state:
     st.session_state.reset_count = 0
 
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
+
+if 'ai_report' not in st.session_state:
+    st.session_state.ai_report = ""
+
 def force_reset():
     for key in list(st.session_state.keys()):
-        if key != 'reset_count':
+        if key not in ['reset_count']:
             del st.session_state[key]
     st.session_state.reset_count += 1
+    st.session_state.analysis_done = False
+    st.session_state.ai_report = ""
 
 r_id = st.session_state.reset_count
-
-# AI 분석 결과 캐싱을 위한 세션 변수 초기화
-if 'ai_analysis_result' not in st.session_state:
-    st.session_state.ai_analysis_result = None
 
 # ==========================================
 # 3. 세분화된 전공 / 학과 리스트 정의 (자율전공 포함)
@@ -395,7 +399,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (세션 상태 기반 비동기 안정형 렌더링)
+# TAB 2: 3대 역량 세특 정밀 분석 (완전 분리형 안전 실행 구조)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -421,8 +425,9 @@ with tab2:
 
     st.markdown("---")
     
-    # 버튼 클릭 시 세션 상태에 플래그를 두거나 직접 실행
-    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}"):
+    run_clicked = st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}")
+
+    if run_clicked:
         if not api_key_input:
             st.error("⚠️ Gemini API 키가 입력되지 않았거나 연동되지 않았습니다. 사이드바를 확인해 주세요.")
         elif st.session_state.selected_gpa == 0:
@@ -445,28 +450,33 @@ with tab2:
 3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
 4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
-            # 안정적인 통신을 위한 예외 핸들링 구조
-            with st.spinner("🧠 AI가 분석 보고서를 생성하는 중입니다. 잠시만 기다려주세요..."):
+            # st.spinner나 st.status 대신 별도의 안내 박스와 함께 즉시 실행
+            with st.container():
+                info_box = st.info("🧠 AI가 분석 보고서를 생성하는 중입니다... (잠시만 기다려주세요)")
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    # API 호출
                     res = model.generate_content(prompt)
+                    info_box.empty()
                     
                     if res and hasattr(res, 'text') and res.text:
-                        st.session_state.ai_analysis_result = res.text
+                        st.session_state.ai_report = res.text
+                        st.rerun()
                     else:
-                        st.error("⚠️ AI로부터 응답을 받지 못했습니다. API 키 상태를 확인해 주세요.")
+                        st.error("⚠️ AI로부터 응답을 받지 못했습니다. API 키를 확인해 주세요.")
                 except Exception as e:
-                    st.error(f"❌ AI 통신 중 오류가 발생했습니다: {str(e)}")
+                    info_box.empty()
+                    st.error(f"❌ API 통신 중 오류가 발생했습니다: {str(e)}")
 
-    # 저장된 결과가 있으면 화면에 출력
-    if st.session_state.ai_analysis_result:
-        st.markdown("---")
-        st.markdown("### 📋 AI 정밀 심화 분석 결과")
-        st.markdown(st.session_state.ai_analysis_result)
+    # 세션에 저장된 보고서가 있으면 화면에 출력
+    if st.session_state.ai_report:
+        st.markdown("### 📋 AI 정밀 심화 분석 보고서")
+        st.markdown(st.session_state.ai_report)
+        if st.button("🗑️ 분석 결과 지우기", key=f"clear_ai_{r_id}I"):
+            st.session_state.ai_report = ""
+            st.rerun()
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
@@ -499,3 +509,4 @@ with tab3:
             * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
             * **합격 예측**: **{curr_gpa_txt}** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
             """)
+
