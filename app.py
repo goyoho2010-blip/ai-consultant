@@ -61,10 +61,14 @@ def force_reset():
 r_id = st.session_state.reset_count
 
 # ==========================================
-# 3. 세분화된 전공 / 학과 리스트 정의 (건축/건축공학 및 누락 학과 대폭 보강)
+# 3. 세분화된 전공 / 학과 리스트 정의 (자율전공 추가)
 # ==========================================
 MAJOR_CATEGORIES = {
     "--- 선택하세요 ---": ["-"],
+    "--- 자율전공 / 무전공 / 첨단융합 ---": [
+        "자유전공학부", "자율전공학과", "첨단융합학부", "융합자율전공학부", 
+        "인문사회계열 통합선발", "자연공학계열 통합선발", "계열별 무전공 통합선발"
+    ],
     "--- 건축 / 토목 / 도시 ---": [
         "건축학과 (5년제)", "건축공학과", "도시공학과", "도시계획부동산학과", "토목공학과", "스마트시티학부"
     ],
@@ -170,7 +174,7 @@ class NEISParserAndEngine:
             return {
                 "student_name": "박지환",
                 "scores": [{'subject': '국어', 'unit': 10, 'grade': 3}, {'subject': '수학', 'unit': 10, 'grade': 3}, {'subject': '영어', 'unit': 10, 'grade': 2}, {'subject': '사회', 'unit': 10, 'grade': 3}, {'subject': '과학', 'unit': 10, 'grade': 4}],
-                "seteuk": {"교과탐구": "도시공간 및 건축공학적 요소를 수학적 모형과 연계하여 탐구함."}
+                "seteuk": {"교과탐구": "자율전공 및 융합학문적 소양을 넓히기 위해 인문과 과학을 아우르는 탐구를 수행함."}
             }
 
         # 세특 텍스트 파싱
@@ -270,7 +274,7 @@ with st.sidebar:
     if uploaded_file is not None and st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
         curr_gpa = st.session_state.selected_gpa
         eval_academic = "중상 (Above Avg)" if curr_gpa >= 3.0 else "상상 (Top)" if curr_gpa <= 1.70 else "상중 (Very High)"
-        eval_career = "상상 (Top)" if any(k in all_text for k in ["도시", "건축", "공학", "설계", "공간", "지리", "환경"]) else "상중 (Very High)"
+        eval_career = "상상 (Top)" if any(k in all_text for k in ["자율", "자유", "융합", "통합", "다전공", "공학", "인문"]) else "상중 (Very High)"
         eval_comm = "상상 (Top)"
     else:
         eval_academic = "-"
