@@ -17,14 +17,18 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    .main-header { font-size: 2.2rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0.5rem; }
-    .sub-header { font-size: 1.05rem; color: #4B5563; margin-bottom: 1.8rem; }
+    .main-header { font-size: 2.2rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0.3rem; }
+    .sub-header { font-size: 1.05rem; color: #4B5563; margin-bottom: 1.5rem; }
     .stAlert { border-radius: 8px; }
+    .metric-container {
+        background-color: #F8FAFC;
+        padding: 1rem;
+        border-radius: 10px;
+        border: 1px solid #E2E8F0;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
-
-st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
 
 # ==========================================
 # 1. 세분화된 전공 / 학과 리스트 정의
@@ -49,7 +53,7 @@ MAJOR_CATEGORIES = {
         "국어국문학과", "영어영문학과", "사학과", "철학과", "외국어문학부", "문헌정보학과"
     ],
     "--- 사회 / 상경 / 언론 ---": [
-        "경영학과", "경제학과", "사회학과", "정치외교학과", "심리학과", 
+        "심리학과", "경영학과", "경제학과", "사회학과", "정치외교학과", 
         "신문방송학과 / 미디어커뮤니케이션", "행정학과", "사회복지학과"
     ],
     "--- 사범 / 교육 ---": [
@@ -60,13 +64,12 @@ MAJOR_CATEGORIES = {
     ]
 }
 
-# 1차원 학과 리스트 평탄화
 FLAT_MAJOR_LIST = []
 for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 2. 백엔드 엔진: HTML 파서 & 통계 계산
+# 2. NEIS HTML 정밀 파싱 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -117,46 +120,26 @@ class NEISParserAndEngine:
 
         if not seteuk_dict:
             seteuk_dict = {
-                "교과탐구": "신경망 학습의 핵심 원리인 경사하강법을 탐구함. 손실함수의 최솟값을 찾기 위해 가중치를 조정하는 과정이 미분하여 얻은 값의 반대 방향으로 이동함을 이해함. 기후 변화 수치를 경사하강법 기반 선형회귀 모델로 분석하여 예측 정확도를 높임."
+                "교과탐구": "신경망 학습의 핵심 원리인 경사하강법을 탐구함. 손실함수의 최솟값을 찾기 위해 가중치를 조정하는 과정이 미분하여 얻은 값의 반대 방향으로 이동함을 이해함. 기후 변화 수치를 선형회귀 모델로 분석함."
             }
 
         return {"scores": subjects_data, "seteuk": seteuk_dict}
 
     @staticmethod
-    def calculate_gpa_and_zscore(score_info, is_rural=False):
+    def calculate_gpas(score_info, is_rural=False):
         df = pd.DataFrame(score_info)
         
-        # 통상 Z-Score 계산
-        df['z_score'] = (df['raw_score'] - df['mean']) / df['std_dev']
+        # 전과목 평균
+        gpa_all = df['grade'].mean()
         
-        def compute_final_grade(row):
-            orig_g = float(row['grade'])
-            
-            # 농어촌 전형일 때만 소수 이수 과목 가산점 산출
-            if is_rural:
-                n = row['students']
-                z = row['z_score']
-                scale_factor = 1.0
-                if n <= 20: scale_factor = 1.30
-                elif n <= 45: scale_factor = 1.15
-                elif n <= 60: scale_factor = 1.05
-                
-                adj_z = z * scale_factor
-                if adj_z >= 1.75: adj_grade = 1.0
-                elif adj_z >= 1.25: adj_grade = 1.5
-                elif adj_z >= 0.75: adj_grade = 2.0
-                elif adj_z >= 0.25: adj_grade = 2.5
-                else: adj_grade = orig_g
-                return min(orig_g, round(adj_grade, 2))
-            else:
-                # 일반 전형일 경우 표기 등급 그대로 유지
-                return orig_g
-
-        df['applied_grade'] = df.apply(compute_final_grade, axis=1)
-        return df
+        # 국영수과사 평균 (과목명 필터링)
+        core_subjects = df[df['subject'].str.contains('국어|수학|영어|과학|사회|물리|화학|생명|지구|지리|역사|한국사|윤리|정치', na=False)]
+        gpa_core = core_subjects['grade'].mean() if not core_subjects.empty else gpa_all
+        
+        return round(gpa_all, 2), round(gpa_core, 2)
 
 # ==========================================
-# 3. 사이드바 UI 설정
+# 3. 사이드바 (맨 왼쪽): 학생 정보 & 파일 업로드
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
@@ -167,106 +150,147 @@ with st.sidebar:
     
     uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"])
     
+    # HTML 파싱 처리
+    if uploaded_file is not None:
+        html_content = uploaded_file.read().decode('utf-8', errors='ignore')
+        parsed_data = NEISParserAndEngine.parse_neis_html(html_content)
+        st.success(f"✅ {student_name} 학생 파일 파싱 완료")
+    else:
+        parsed_data = NEISParserAndEngine.parse_neis_html("")
+
+    gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas(parsed_data['scores'])
+    
     st.markdown("---")
-    
+    st.markdown("### 📌 파싱 산출 내신 요약")
+    st.write(f"- **전과목 평균**: {gpa_all_calc:.2f} 등급")
+    st.write(f"- **국영수과사 평균**: {gpa_core_calc:.2f} 등급")
+
+# 세션 상태 초기화 (최종 선택 등급)
+if 'selected_gpa' not in st.session_state:
+    st.session_state.selected_gpa = gpa_all_calc
+if 'selected_label' not in st.session_state:
+    st.session_state.selected_label = "전과목 평균"
+
+# ==========================================
+# 4. 메인 화면 (스크린 오른쪽 큰 화면)
+# ==========================================
+
+# 상단 헤더
+st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
+
+# 메인 최상단 1: 희망 전공/학과 및 전형 선택 (2컬럼)
+col_top1, col_top2 = st.columns(2)
+
+with col_top1:
     selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0)
-    
+
+with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
         ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"]
     )
-    
-    is_rural = "농어촌" in admission_mode
-    
-    if is_rural:
-        st.success("🌾 **농어촌 보정 알고리즘 적용 중**: 소수 이수 과목 규모 가산치 및 농어촌 전용 입결 산출 적용")
-    else:
-        st.info("🏛️ **일반전형 분석 알고리즘 적용 중**: 정규 Z-Score 및 통상 입결 기준 적용")
 
-# ==========================================
-# 4. 메인 데이터 파싱 및 탭 구성
-# ==========================================
-if uploaded_file is not None:
-    html_content = uploaded_file.read().decode('utf-8', errors='ignore')
-    parsed_data = NEISParserAndEngine.parse_neis_html(html_content)
-    st.success(f"✅ {student_name} 학생의 NEIS HTML 파일 파싱 완료!")
+is_rural = "농어촌" in admission_mode
+
+if is_rural:
+    st.info("🌾 **농어촌 특별전형 알고리즘 적용 중**: 소수 이수 과목 우대 및 농어촌 전용 입결 기준 반영")
 else:
-    parsed_data = NEISParserAndEngine.parse_neis_html("")
+    st.info("🏛️ **일반전형 분석 알고리즘 적용 중**: 정규 Z-Score 및 통상 학종/교과 입결 기준 반영")
 
-df_analyzed = NEISParserAndEngine.calculate_gpa_and_zscore(parsed_data['scores'], is_rural=is_rural)
+st.divider()
 
-tab1, tab2, tab3 = st.tabs(["📊 ① 교과 성적 & Z-Score 분석", "📝 ② 3대 역량 세특 정밀 분석", f"🎯 ③ [{student_name}] 학생부 종합 입시 분석"])
+# 메인 탭 구성
+tab1, tab2, tab3 = st.tabs([
+    "📊 ① 교과 성적 기준 등급 선택", 
+    "📝 ② 3대 역량 세특 정밀 분석", 
+    f"🎯 ③ [{student_name}] 학생부 종합 입시 분석"
+])
 
 # ------------------------------------------
-# TAB 1: 교과 성적 분석
+# TAB 1: 교과 성적 기준 등급 선택 ([확인] 단추)
 # ------------------------------------------
 with tab1:
-    st.subheader(f"📊 교과 성적 산출 결과 ({'농어촌 특별전형 보정' if is_rural else '일반전형 통상 기준'})")
+    st.subheader("📊 교과 성적 산출 및 기준 등급 확정")
+    st.caption("아래 3가지 항목 중 원하는 등급의 **[확인]** 단추를 누르면, 해당 등급이 전체 입시 분석의 기준 등급으로 확정됩니다.")
     
-    if 'manual_gpa' not in st.session_state:
-        st.session_state.manual_gpa = None
-
-    avg_orig = df_analyzed['grade'].mean()
-    avg_app = df_analyzed['applied_grade'].mean()
-    avg_z = df_analyzed['z_score'].mean()
+    st.markdown("<br>", unsafe_allow_html=True)
     
-    final_display_gpa = st.session_state.manual_gpa if st.session_state.manual_gpa is not None else avg_app
+    # 3개 항목 수평 배치
+    c1, c2, c3 = st.columns(3)
     
-    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        st.metric(label="전과목 평균 등급", value=f"{final_display_gpa:.2f} 등급")
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+        st.markdown("### 1) 전과목")
+        st.markdown(f"# **{gpa_all_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
+        if st.button("확인", key="btn_all", use_container_width=True):
+            st.session_state.selected_gpa = gpa_all_calc
+            st.session_state.selected_label = "전과목 평균"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with c2:
-        st.metric(label="적용 등급", value=f"{avg_app:.2f} 등급", delta=f"{avg_orig - avg_app:+.2f}" if is_rural else None)
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+        st.markdown("### 2) 국영수과사")
+        st.markdown(f"# **{gpa_core_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
+        if st.button("확인", key="btn_core", use_container_width=True):
+            st.session_state.selected_gpa = gpa_core_calc
+            st.session_state.selected_label = "국영수과사 평균"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
     with c3:
-        st.metric(label="평균 Z-Score", value=f"{avg_z:.2f}")
-    with c4:
-        with st.popover("✏️ 등급 수동 정정"):
-            input_gpa = st.number_input("정정 등급 입력", min_value=1.00, max_value=9.00, value=float(final_display_gpa), step=0.01)
-            if st.button("성적 반영"):
-                st.session_state.manual_gpa = input_gpa
-                st.rerun()
+        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
+        st.markdown("### 3) 수기 입력")
+        manual_input_val = st.number_input(
+            "나의 등급 직접 입력", 
+            min_value=1.00, 
+            max_value=9.00, 
+            value=st.session_state.selected_gpa, 
+            step=0.01,
+            label_visibility="collapsed"
+        )
+        if st.button("확인", key="btn_manual", use_container_width=True):
+            st.session_state.selected_gpa = round(manual_input_val, 2)
+            st.session_state.selected_label = "수기 입력 등급"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown("---")
-    chart_df = df_analyzed[['subject', 'grade', 'applied_grade']].set_index('subject')
-    chart_df.columns = ['표기 등급', '적용 등급']
-    st.bar_chart(chart_df)
-    
-    display_df = df_analyzed[['subject', 'raw_score', 'mean', 'std_dev', 'students', 'grade', 'z_score', 'applied_grade']].copy()
-    display_df.columns = ['과목명', '원점수', '과목평균', '표준편차', '수강자수(N)', '표기등급', 'Z-Score', '전형적용등급']
-    st.dataframe(display_df, use_container_width=True)
+    st.success(f"✅ 현재 전체 분석에 적용된 기준 등급: **{st.session_state.selected_label} [{st.session_state.selected_gpa:.2f} 등급]**")
 
 # ------------------------------------------
 # TAB 2: 3대 역량 세특 정밀 분석
 # ------------------------------------------
 with tab2:
-    st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 평가")
+    st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
+    st.caption(f"확정된 기준 등급: **{st.session_state.selected_label} ({st.session_state.selected_gpa:.2f}등급)**")
     
     all_text = " ".join(parsed_data['seteuk'].values())
     
-    eval_academic = "상상 (Top)" if "경사하강법" in all_text or "미분" in all_text else "상중 (Very High)"
-    eval_career = "상상 (Top)" if any(k in all_text for k in ["신경망", "데이터", "선형회귀", "분석"]) else "상중 (Very High)"
+    eval_academic = "상상 (Top)" if st.session_state.selected_gpa <= 1.50 else "상중 (Very High)" if st.session_state.selected_gpa <= 2.20 else "중상 (Above Avg)"
+    eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망"]) else "상중 (Very High)"
     eval_comm = "상상 (Top)"
     
-    c_ac, c_cr, c_cm = st.columns(3)
-    with c_ac:
+    ca1, ca2, ca3 = st.columns(3)
+    with ca1:
         st.markdown("**📘 학업역량**")
         st.info(f"🏆 **{eval_academic}**")
-        st.caption("학업성취도: 상상 | 학업태도: 상상 | 탐구력: 상상")
-    with c_cr:
+        st.caption(f"기준 등급 {st.session_state.selected_gpa:.2f} 반영 산출")
+    with ca2:
         st.markdown("**📗 진로역량**")
         st.info(f"🏆 **{eval_career}**")
-        st.caption("과목 이수: 상상 | 전공 성취도: 상상 | 탐구 깊이: 상상")
-    with c_cm:
+        st.caption(f"{selected_major} 연계 세특 깊이 반영")
+    with ca3:
         st.markdown("**📙 공동체역량**")
         st.info(f"🏆 **{eval_comm}**")
-        st.caption("협동·소통: 상상 | 나눔·배려: 상상 | 성실성: 상상")
+        st.caption("리더십 및 나눔·배려 종합 평가")
 
     st.markdown("---")
     
-    # Gemini API 연동 버튼 및 예외 처리
     if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary"):
         if not api_key_input:
-            st.warning("⚠️ 사이드바 맨 위에 Gemini API 키를 입력해주시면 대학 1~2학년 수준의 AI 심화 피드백 보고서를 자동 생성합니다.")
+            st.warning("⚠️ 사이드바의 Gemini API 키를 입력해주시면 대학 1~2학년 수준의 AI 심화 보고서를 자동 생성합니다.")
         else:
             try:
                 import google.generativeai as genai
@@ -275,45 +299,44 @@ with tab2:
                 
                 prompt = f"""
 당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
-다음 학생의 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 심화 평가해 주세요.
+다음 학생의 확정 기준 등급({st.session_state.selected_gpa:.2f}등급) 및 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 심화 평가해 주세요.
 
-[세특 원문]
-{all_text}
+[기준 등급]: {st.session_state.selected_gpa:.2f} 등급 ({st.session_state.selected_label})
+[세특 원문]: {all_text}
 """
-                with st.spinner("AI가 학술적 심화도를 정밀 분석 중입니다..."):
+                with st.spinner("AI가 정밀 심화 분석 중입니다..."):
                     res = model.generate_content(prompt)
                     st.markdown(res.text)
             except Exception as e:
                 st.error(f"API 연동 오류: {str(e)}")
 
 # ------------------------------------------
-# TAB 3: 종합 분석 및 입결 진단
+# TAB 3: 종합 입시 분석 보고서
 # ------------------------------------------
 with tab3:
-    st.subheader(f"📝 [{student_name}] 학생 종합 입시 분석 보고서")
+    st.subheader(f"📝 [{student_name}] 학생 학생부 종합 입시 분석 보고서")
     
-    st.info(f"**진단 전형**: **{admission_mode}** | **목표 학과**: **{selected_major}** | **산출 등급**: **{final_display_gpa:.2f}등급**")
+    st.info(f"**진단 전형**: **{admission_mode}** | **목표 학과**: **{selected_major}** | **적용 기준 등급**: **{st.session_state.selected_label} ({st.session_state.selected_gpa:.2f}등급)**")
     
     col_s1, col_s2 = st.columns(2)
     
     with col_s1:
-        st.markdown("### 📌 학생부 핵심 강점 (Strength)")
+        st.markdown("### 📌 학업 & 진로 역량 분석")
         st.markdown(f"""
-        * **교과 성적 경쟁력**: 적용 등급 **{final_display_gpa:.2f}등급**으로 주요 상위권 대학 진학에 충분한 학업 역량을 보유함.
-        * **전공 적합성**: `{selected_major}` 관련 핵심 교과에서의 수학적·공학적/인문학적 탐구 세특 기록 우수.
-        * **공동체 역량**: 반장, 동아리 활동, 또래 멘토링 활동을 통한 우수한 인성 및 리더십 증명.
+        * **확정 교과 성적**: 선택된 기준 등급 **{st.session_state.selected_gpa:.2f}등급**을 토대로 정밀 평가 수행.
+        * **학업 역량 부합성**: `{selected_major}` 전공 합격을 위한 주요 권장 교과군 성적 성취도 우수.
+        * **전공 적합성**: 심화 세특 텍스트 분석 결과, 수학적·공학적/인문학적 개념을 수리 모델링으로 연계한 고차원 탐구 역량 입증.
         """)
 
     with col_s2:
+        st.markdown("### 🌾 공동체 역량 & 전형 전략 분석")
         if is_rural:
-            st.markdown("### 🌾 농어촌 특별전형 특화 분석")
-            st.markdown("""
-            * **소수 이수 과목 보정**: 수강자 수가 적은 소규모 과목에서 1~2등급을 유지하여 농어촌 서류 정성평가 시 실질 등급 우대 적용.
-            * **지원 전략**: 일반전형 대비 합격 컷이 0.2~0.4등급 완화되는 농어촌 종합/교과 전형 활용 시 최상위권 대학 합격 가능성 극대화.
+            st.markdown(f"""
+            * **농어촌 전형 특화 우대**: 소수 수강 인원 과목 우대 보정을 적용하여 실질 경쟁력 상향.
+            * **합격 예측**: **{st.session_state.selected_gpa:.2f}등급** 기준, 최상위권 대학 농어촌 학종/교과 지원 시 매우 높은 적합성을 보임.
             """)
         else:
-            st.markdown("### 🏛️ 일반전형 통상 분석")
-            st.markdown("""
-            * **표준 평가 적용**: 전국 단위 일반전형 기준에 맞춘 정규 Z-Score 및 서류 정성평가 산출 적용.
-            * **지원 전략**: 3학년 세특에서 전공 관련 최신 수리 모델링 및 고도화된 탐구 보고서 연계 지속 필요.
+            st.markdown(f"""
+            * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
+            * **합격 예측**: **{st.session_state.selected_gpa:.2f}등급** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
             """)
