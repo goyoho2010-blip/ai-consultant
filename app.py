@@ -391,7 +391,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (타임아웃 방지 및 예외 핸들링 강화)
+# TAB 2: 3대 역량 세특 정밀 분석 (st.status 실시간 진행형 전환으로 멈춤 원천 해결)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -440,18 +440,26 @@ with tab2:
 3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
 4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
-            with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
+            # st.status를 사용하여 멈춤 현상(무한 스피너)을 원천 차단하고 상태 시각화
+            with st.status("🚀 AI 정밀 심화 분석 파이프라인 가동 중...", expanded=True) as status:
                 try:
+                    st.write("🔄 구글 제미나이 AI 서버와 통신 연결 중...")
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
                     model = genai.GenerativeModel('gemini-1.5-flash')
+                    
+                    st.write("🧠 학생부 세특 데이터 및 희망 전공 심층 연계 분석 중...")
                     res = model.generate_content(prompt)
+                    
                     if res and res.text:
+                        status.update(label="✅ 심화 분석 보고서 생성 완료!", state="complete", expanded=False)
                         st.markdown(res.text)
                     else:
-                        st.error("⚠️ AI 응답 생성에 실패했습니다. API 키 상태 및 네트워크 연결을 확인해 주세요.")
+                        status.update(label="⚠️ AI 응답 생성 실패", state="error", expanded=True)
+                        st.error("⚠️ AI 응답이 비어있습니다. API 키 상태를 확인해 주세요.")
                 except Exception as e:
-                    st.error(f"❌ AI 분석 중 오류가 발생했습니다: {str(e)}")
+                    status.update(label="❌ 통신 오류 발생", state="error", expanded=True)
+                    st.error(f"❌ API 통신 중 오류가 발생했습니다: {str(e)}")
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
