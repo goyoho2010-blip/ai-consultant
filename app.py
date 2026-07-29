@@ -15,13 +15,13 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 커스텀 CSS (제목 색상을 밝은 하늘색 계열로 변경)
+# 커스텀 CSS
 st.markdown("""
 <style>
     .main-header { 
         font-size: 2.3rem; 
         font-weight: 800; 
-        color: #38BDF8; /* 밝은 아쿠아 블루 계열 */
+        color: #38BDF8; 
         margin-bottom: 0.3rem; 
         text-shadow: 0px 2px 4px rgba(0,0,0,0.3);
     }
@@ -47,7 +47,22 @@ st.markdown("""
 AUTO_GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
 # ==========================================
-# 2. 세분화된 전공 / 학과 리스트 정의
+# 2. 초기화 상태 관리 (리셋 카운터 기법 적용)
+# ==========================================
+if 'reset_count' not in st.session_state:
+    st.session_state.reset_count = 0
+
+def force_reset():
+    """모든 세션 변수를 삭제하고 위젯 key 카운터를 올려 100% 깨끗이 리셋"""
+    for key in list(st.session_state.keys()):
+        if key != 'reset_count':
+            del st.session_state[key]
+    st.session_state.reset_count += 1
+
+r_id = st.session_state.reset_count  # 동적 위젯 key 생성을 위한 ID
+
+# ==========================================
+# 3. 세분화된 전공 / 학과 리스트 정의
 # ==========================================
 MAJOR_CATEGORIES = {
     "--- IT / AI / 컴퓨터 ---": [
@@ -85,7 +100,7 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 3. NEIS HTML 정밀 파싱 엔진
+# 4. NEIS HTML 정밀 파싱 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -118,6 +133,7 @@ class NEISParserAndEngine:
                     except Exception:
                         continue
         
+        # 기본 샘플 데이터 (업로드 전)
         if not subjects_data:
             subjects_data = [
                 {'subject': '수학Ⅰ', 'raw_score': 93.0, 'mean': 57.7, 'std_dev': 24.0, 'students': 120, 'grade': 1},
@@ -150,37 +166,32 @@ class NEISParserAndEngine:
         return round(gpa_all, 2), round(gpa_core, 2)
 
 # ==========================================
-# 4. 사이드바 (초기화 및 입력 위젯)
+# 5. 사이드바 (초기화 버튼 및 동적 위젯 키 적용)
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
     
-    # 🔄 완벽 초기화 함수 정의
-    def reset_all():
-        for key in list(st.session_state.keys()):
-            del st.session_state[key]
-
-    # 1. 완벽 초기화 버튼
-    st.button("🔄 데이터 및 설정 초기화", on_click=reset_all, use_container_width=True, type="secondary")
+    # 완벽 초기화 버튼
+    st.button("🔄 데이터 및 설정 초기화", on_click=force_reset, use_container_width=True, type="secondary")
 
     st.markdown("---")
     
-    student_name = st.text_input("학생 이름", value="허지안", key="input_student_name")
+    student_name = st.text_input("학생 이름", value="", placeholder="학생 이름을 입력하세요", key=f"name_{r_id}")
     
-    # Gemini API Key 자동 적용 안내 및 수동 수정을 위한 폴백
     if AUTO_GEMINI_API_KEY:
         st.success("🤖 Gemini AI API 키가 시스템에 자동 연동되었습니다.")
         api_key_input = AUTO_GEMINI_API_KEY
     else:
-        api_key_input = st.text_input("Gemini API Key 입력", type="password", key="input_api_key", help="자동 설정된 키가 없을 경우 수동 입력")
+        api_key_input = st.text_input("Gemini API Key 입력", type="password", key=f"key_{r_id}", help="자동 설정된 키가 없을 경우 수동 입력")
 
-    uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"], key="file_uploader_html")
+    uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"], key=f"file_{r_id}")
     
     # HTML 파싱 처리
     if uploaded_file is not None:
         html_content = uploaded_file.read().decode('utf-8', errors='ignore')
         parsed_data = NEISParserAndEngine.parse_neis_html(html_content)
-        st.success(f"✅ {student_name} 학생 파일 파싱 완료")
+        display_name = student_name if student_name else "학생"
+        st.success(f"✅ {display_name} 학생 파일 파싱 완료")
     else:
         parsed_data = NEISParserAndEngine.parse_neis_html("")
 
@@ -191,32 +202,30 @@ with st.sidebar:
     st.write(f"- **전과목 평균**: {gpa_all_calc:.2f} 등급")
     st.write(f"- **국영수과사 평균**: {gpa_core_calc:.2f} 등급")
 
-# 세션 상태 초기화 (최종 선택 등급)
+# 선택 등급 세션 초기화
 if 'selected_gpa' not in st.session_state:
     st.session_state.selected_gpa = gpa_all_calc
 if 'selected_label' not in st.session_state:
     st.session_state.selected_label = "전과목 평균"
 
 # ==========================================
-# 5. 메인 화면
+# 6. 메인 화면
 # ==========================================
 
-# 메인 헤더
 st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
 
-# 메인 최상단: 희망 전공/학과 및 전형 선택 (Key 부여)
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
-    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0, key="select_major")
+    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0, key=f"major_{r_id}")
 
 with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
         ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
         index=0,
-        key="select_admission"
+        key=f"admission_{r_id}"
     )
 
 is_rural = "농어촌" in admission_mode
@@ -228,11 +237,12 @@ else:
 
 st.divider()
 
-# 메인 탭 구성
+display_student = student_name if student_name else "미입력"
+
 tab1, tab2, tab3 = st.tabs([
     "📊 ① 교과 성적 기준 등급 선택", 
     "📝 ② 3대 역량 세특 정밀 분석", 
-    f"🎯 ③ [{student_name}] 학생부 종합 입시 분석"
+    f"🎯 ③ [{display_student}] 학생부 종합 입시 분석"
 ])
 
 # ------------------------------------------
@@ -250,7 +260,7 @@ with tab1:
         st.markdown('<div class="metric-container">', unsafe_allow_html=True)
         st.markdown("### 1) 전과목")
         st.markdown(f"# **{gpa_all_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-        if st.button("확인", key="btn_all", use_container_width=True):
+        if st.button("확인", key=f"btn_all_{r_id}", use_container_width=True):
             st.session_state.selected_gpa = gpa_all_calc
             st.session_state.selected_label = "전과목 평균"
             st.rerun()
@@ -260,7 +270,7 @@ with tab1:
         st.markdown('<div class="metric-container">', unsafe_allow_html=True)
         st.markdown("### 2) 국영수과사")
         st.markdown(f"# **{gpa_core_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-        if st.button("확인", key="btn_core", use_container_width=True):
+        if st.button("확인", key=f"btn_core_{r_id}", use_container_width=True):
             st.session_state.selected_gpa = gpa_core_calc
             st.session_state.selected_label = "국영수과사 평균"
             st.rerun()
@@ -276,9 +286,9 @@ with tab1:
             value=st.session_state.selected_gpa, 
             step=0.01,
             label_visibility="collapsed",
-            key="input_manual_gpa"
+            key=f"manual_{r_id}"
         )
-        if st.button("확인", key="btn_manual", use_container_width=True):
+        if st.button("확인", key=f"btn_manual_{r_id}", use_container_width=True):
             st.session_state.selected_gpa = round(manual_input_val, 2)
             st.session_state.selected_label = "수기 입력 등급"
             st.rerun()
@@ -316,7 +326,7 @@ with tab2:
 
     st.markdown("---")
     
-    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key="btn_run_ai"):
+    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}"):
         if not api_key_input:
             st.warning("⚠️ Gemini API 키가 감지되지 않았습니다. 사이드바에 API 키를 입력해 주세요.")
         else:
@@ -342,7 +352,7 @@ with tab2:
 # TAB 3: 종합 입시 분석 보고서
 # ------------------------------------------
 with tab3:
-    st.subheader(f"📝 [{student_name}] 학생 학생부 종합 입시 분석 보고서")
+    st.subheader(f"📝 [{display_student}] 학생 학생부 종합 입시 분석 보고서")
     
     st.info(f"**진단 전형**: **{admission_mode}** | **목표 학과**: **{selected_major}** | **적용 기준 등급**: **{st.session_state.selected_label} ({st.session_state.selected_gpa:.2f}등급)**")
     
