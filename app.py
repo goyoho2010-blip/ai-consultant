@@ -53,7 +53,6 @@ if 'reset_count' not in st.session_state:
     st.session_state.reset_count = 0
 
 def force_reset():
-    """모든 세션 변수를 삭제하고 위젯 key 카운터를 올려 100% 깨끗이 리셋"""
     for key in list(st.session_state.keys()):
         if key != 'reset_count':
             del st.session_state[key]
@@ -141,7 +140,7 @@ class NEISParserAndEngine:
         sections = soup.find_all(['p', 'div', 'td'])
         for sec in sections:
             txt = sec.get_text(strip=True)
-            if len(txt) > 50 and "세부능력" not in txt and "학교생활기록" not in txt:
+            if len(txt) > 40 and "세부능력" not in txt and "학교생활기록" not in txt:
                 seteuk_dict["교과탐구"] = seteuk_dict.get("교과탐구", "") + " " + txt
 
         return {"scores": subjects_data, "seteuk": seteuk_dict}
@@ -182,7 +181,6 @@ class NEISParserAndEngine:
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
     
-    # [초기화 버튼 1] 사이드바용
     st.button("🔄 전체 데이터 초기화", on_click=force_reset, use_container_width=True, type="secondary", key=f"btn_reset_side_{r_id}")
 
     st.markdown("---")
@@ -207,18 +205,16 @@ with st.sidebar:
         parsed_data = {"scores": [], "seteuk": {}}
         gpa_all_calc, gpa_core_calc = 0.0, 0.0
 
-    # 세션 상태 초기화 (최종 선택 등급)
     if 'selected_gpa' not in st.session_state:
         st.session_state.selected_gpa = gpa_all_calc if gpa_all_calc > 0 else 0.0
     if 'selected_label' not in st.session_state:
         st.session_state.selected_label = "미선택"
 
-    # 3대 역량 평가값 실시간 산출 (기준 등급 및 파싱 세특 기반)
     all_text = " ".join(parsed_data['seteuk'].values()) if parsed_data['seteuk'] else ""
     if uploaded_file is not None and st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
         curr_gpa = st.session_state.selected_gpa
         eval_academic = "상상 (Top)" if curr_gpa <= 1.50 else "상중 (Very High)" if curr_gpa <= 2.20 else "중상 (Above Avg)"
-        eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망"]) else "상중 (Very High)"
+        eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망", "수의", "의학", "생명", "임상", "세포"]) else "상중 (Very High)"
         eval_comm = "상상 (Top)"
     else:
         eval_academic = "-"
@@ -244,18 +240,15 @@ with st.sidebar:
 # 6. 메인 화면 UI
 # ==========================================
 
-# 메인 헤더
 st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
 
-# [초기화 버튼 2] 메인 화면 전용
 col_btn1, col_btn2 = st.columns([1, 4])
 with col_btn1:
     st.button("🔄 메인 설정 및 평가 초기화", on_click=force_reset, use_container_width=True, type="secondary", key=f"btn_reset_main_{r_id}")
 
 st.markdown("<br>", unsafe_allow_html=True)
 
-# 메인 최상단 2개 컬럼: 희망 전공/학과 및 전형 선택
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
@@ -351,7 +344,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (초기화 시 '-' 표시)
+# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 1.5-flash 표준 연동)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -389,27 +382,42 @@ with tab2:
     
     if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}"):
         if not api_key_input:
-            st.warning("⚠️ Gemini API 키가 감지되지 않았습니다. 사이드바에 API 키를 입력해 주세요.")
+            st.error("⚠️ Gemini API 키가 입력되지 않았거나 연동되지 않았습니다. 사이드바를 확인해 주세요.")
         elif st.session_state.selected_gpa == 0:
             st.warning("⚠️ 학생부 파일 업로드 및 [확인] 단추로 기준 등급을 먼저 확정해 주세요.")
         else:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=api_key_input)
-                model = genai.GenerativeModel('gemini-2.5-flash')
+                # 안정성이 검증된 표준 1.5-flash 모델 적용
+                model = genai.GenerativeModel('gemini-1.5-flash')
+                
+                # 텍스트 길이 최적화 (3,000자 이내)
+                prompt_text = all_text[:3000] if len(all_text) > 3000 else all_text
                 
                 prompt = f"""
 당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
-다음 학생의 확정 기준 등급({st.session_state.selected_gpa:.2f}등급) 및 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 심화 평가해 주세요.
+다음 학생의 확정 기준 등급({st.session_state.selected_gpa:.2f}등급) 및 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 정밀하게 심화 평가해 주세요.
 
 [기준 등급]: {st.session_state.selected_gpa:.2f} 등급 ({st.session_state.selected_label})
-[세특 원문]: {all_text}
+[희망 학과]: {selected_major}
+[세특 원문 요약]:
+{prompt_text}
+
+[작성 가이드]:
+1. **학업역량**: 교과 지식의 깊이, 수리적/과학적 탐구 과정 및 보완점
+2. **진로역량**: {selected_major} 전공과의 구체적 연계 탐구 실적 평가
+3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
+4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
-                with st.spinner("AI가 정밀 심화 분석 중입니다..."):
+                with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
                     res = model.generate_content(prompt)
-                    st.markdown(res.text)
+                    if res and res.text:
+                        st.markdown(res.text)
+                    else:
+                        st.error("⚠️ AI 응답 생성에 실패했습니다. API 키 상태를 확인해 주세요.")
             except Exception as e:
-                st.error(f"API 연동 오류: {str(e)}")
+                st.error(f"❌ API 호출 중 오류가 발생했습니다: {str(e)}")
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
