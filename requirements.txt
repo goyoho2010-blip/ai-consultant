@@ -3,3 +3,4 @@ pandas
 beautifulsoup4
 openai>=1.0.0
 matplotlib
+google-generativeai
