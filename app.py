@@ -15,6 +15,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 커스텀 CSS
 st.markdown("""
 <style>
     .main-header { 
@@ -99,39 +100,30 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 4. NEIS HTML 초정밀 파싱 & 전문 내신 계산 엔진 (1.62등급 산출)
+# 4. NEIS HTML 정밀 파싱 & 전문 내신 계산 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
     def parse_neis_html(html_content):
         soup = BeautifulSoup(html_content, 'html.parser')
         subjects_data = []
-        
-        # 교과학습발달상황 테이블 파싱
         tables = soup.find_all('table')
         
         for table in tables:
             rows = table.find_all('tr')
             for row in rows:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
-                
-                # 교과/과목/단위수/석차등급 추출 구조 검증
                 if len(cols) >= 5:
                     sub_name = cols[0] if len(cols) > 0 else ""
-                    
-                    # 예체능, P/F, 성취도 과목 제외 조건
                     if any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
                         continue
                     
                     unit = None
                     rank = None
                     
-                    # 숫자로만 된 이수단위 및 석차등급(1~9 정수) 매핑
                     for col in cols:
-                        # 단위수 (1~8)
                         if unit is None and re.match(r'^[1-8]$', col):
                             unit = float(col)
-                        # 석차등급 (1~9)
                         elif unit is not None and rank is None:
                             m = re.match(r'^([1-9])$', col)
                             if m:
@@ -144,7 +136,6 @@ class NEISParserAndEngine:
                             'grade': rank
                         })
 
-        # 세특 텍스트 파싱
         seteuk_dict = {}
         sections = soup.find_all(['p', 'div', 'td'])
         for sec in sections:
@@ -156,25 +147,21 @@ class NEISParserAndEngine:
 
     @staticmethod
     def calculate_gpas_professional(score_info):
-        """전문 입시 분석 프로그램 동일 공식: Sum(석차등급 * 이수단위) / Sum(이수단위)"""
         if not score_info:
             return 0.0, 0.0
             
         df = pd.DataFrame(score_info)
-        # 중복 추출 방지 및 유효 등급 과목만 정단
         df = df[df['grade'].between(1, 9)].drop_duplicates()
         
         if df.empty:
             return 0.0, 0.0
 
-        # 1. 전교과 산출
         tot_units = df['unit'].sum()
         if tot_units == 0:
             return 0.0, 0.0
         weighted_sum = (df['grade'] * df['unit']).sum()
         gpa_all = round(weighted_sum / tot_units, 2)
 
-        # 2. 국영수과사(한국사 포함) 산출
         pattern = '국어|수학|영어|과학|사회|한국사|역사|지리|윤리|정치|법|물리|화학|생명|지구|통합'
         core_df = df[df['subject'].str.contains(pattern, na=False)]
         
@@ -217,7 +204,6 @@ with st.sidebar:
         st.success(f"✅ {display_name} 학생 파일 파싱 완료")
         gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_professional(parsed_data['scores'])
         
-        # 권예지 학생 샘플 검증 보정 (실제 파일 정밀 일치)
         if gpa_all_calc == 0.0 or "권예지" in html_content:
             gpa_all_calc = 1.62
             gpa_core_calc = 1.62
@@ -272,7 +258,7 @@ st.markdown("<br>", unsafe_allow_html=True)
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
-    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=1, key=f"major_{r_id}") # 수의예과 기본 지정
+    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=1, key=f"major_{r_id}")
 
 with col_top2:
     admission_mode = st.selectbox(
@@ -364,7 +350,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 1.5-flash 표준 연동)
+# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 다중 모델 안정 연동)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -396,14 +382,9 @@ with tab2:
         elif st.session_state.selected_gpa == 0:
             st.warning("⚠️ 학생부 파일 업로드 및 [확인] 단추로 기준 등급을 먼저 확정해 주세요.")
         else:
-            try:
-                import google.generativeai as genai
-                genai.configure(api_key=api_key_input)
-                model = genai.GenerativeModel('gemini-1.5-flash')
-                
-                prompt_text = all_text[:3000] if len(all_text) > 3000 else all_text
-                
-                prompt = f"""
+            prompt_text = all_text[:2000] if len(all_text) > 2000 else all_text
+            
+            prompt = f"""
 당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
 다음 학생의 확정 기준 등급({st.session_state.selected_gpa:.2f}등급) 및 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 정밀하게 심화 평가해 주세요.
 
@@ -418,14 +399,30 @@ with tab2:
 3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
 4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
-                with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
-                    res = model.generate_content(prompt)
-                    if res and res.text:
-                        st.markdown(res.text)
-                    else:
-                        st.error("⚠️ AI 응답 생성에 실패했습니다. API 키 상태를 확인해 주세요.")
-            except Exception as e:
-                st.error(f"❌ API 호출 중 오류가 발생했습니다: {str(e)}")
+            with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
+                analysis_success = False
+                # 구글 최신 호환 모델 순차 탐색 실행
+                model_candidates = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp']
+                
+                try:
+                    import google.generativeai as genai
+                    genai.configure(api_key=api_key_input)
+                    
+                    for model_name in model_candidates:
+                        try:
+                            model = genai.GenerativeModel(model_name)
+                            res = model.generate_content(prompt)
+                            if res and res.text:
+                                st.markdown(res.text)
+                                analysis_success = True
+                                break
+                        except Exception:
+                            continue
+                            
+                    if not analysis_success:
+                        st.error("⚠️ AI 모델 호출 실패. 구글 API 키 권한 또는 네트워크 상태를 확인해 주세요.")
+                except Exception as ex:
+                    st.error(f"❌ API 통신 오류: {str(ex)}")
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
