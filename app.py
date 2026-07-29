@@ -15,23 +15,40 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# 커스텀 CSS (제목 색상을 밝은 하늘색 계열로 변경)
 st.markdown("""
 <style>
-    .main-header { font-size: 2.2rem; font-weight: 700; color: #1E3A8A; margin-bottom: 0.3rem; }
-    .sub-header { font-size: 1.05rem; color: #4B5563; margin-bottom: 1.5rem; }
+    .main-header { 
+        font-size: 2.3rem; 
+        font-weight: 800; 
+        color: #38BDF8; /* 밝은 아쿠아 블루 계열로 조정 */
+        margin-bottom: 0.3rem; 
+        text-shadow: 0px 2px 4px rgba(0,0,0,0.3);
+    }
+    .sub-header { 
+        font-size: 1.05rem; 
+        color: #94A3B8; 
+        margin-bottom: 1.5rem; 
+    }
     .stAlert { border-radius: 8px; }
     .metric-container {
-        background-color: #F8FAFC;
-        padding: 1rem;
+        background-color: #1E293B;
+        padding: 1.2rem;
         border-radius: 10px;
-        border: 1px solid #E2E8F0;
+        border: 1px solid #334155;
         margin-bottom: 1rem;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 1. 세분화된 전공 / 학과 리스트 정의
+# 1. API 키 자동 로드 로직 (구글 Gemini)
+# ==========================================
+# Streamlit Secrets 또는 환경 변수에서 자동 감지
+AUTO_GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
+
+# ==========================================
+# 2. 세분화된 전공 / 학과 리스트 정의
 # ==========================================
 MAJOR_CATEGORIES = {
     "--- IT / AI / 컴퓨터 ---": [
@@ -69,7 +86,7 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 2. NEIS HTML 정밀 파싱 엔진
+# 3. NEIS HTML 정밀 파싱 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -126,28 +143,36 @@ class NEISParserAndEngine:
         return {"scores": subjects_data, "seteuk": seteuk_dict}
 
     @staticmethod
-    def calculate_gpas(score_info, is_rural=False):
+    def calculate_gpas(score_info):
         df = pd.DataFrame(score_info)
-        
-        # 전과목 평균
         gpa_all = df['grade'].mean()
-        
-        # 국영수과사 평균 (과목명 필터링)
         core_subjects = df[df['subject'].str.contains('국어|수학|영어|과학|사회|물리|화학|생명|지구|지리|역사|한국사|윤리|정치', na=False)]
         gpa_core = core_subjects['grade'].mean() if not core_subjects.empty else gpa_all
-        
         return round(gpa_all, 2), round(gpa_core, 2)
 
 # ==========================================
-# 3. 사이드바 (맨 왼쪽): 학생 정보 & 파일 업로드
+# 4. 사이드바 (맨 왼쪽): 학생 정보 & 초기화 버튼
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
     
+    # 1. 초기화 버튼
+    if st.button("🔄 데이터 및 설정 초기화", use_container_width=True, type="secondary"):
+        for key in list(st.session_state.keys()):
+            del st.session_state[key]
+        st.rerun()
+
+    st.markdown("---")
+    
     student_name = st.text_input("학생 이름", value="허지안")
     
-    api_key_input = st.text_input("Gemini API Key 입력", type="password", help="Google AI Studio에서 발급받은 API 키")
-    
+    # 3. Gemini API Key 자동 적용 안내 및 수동 수정을 위한 폴백
+    if AUTO_GEMINI_API_KEY:
+        st.success("🤖 Gemini AI API 키가 시스템에 자동 연동되었습니다.")
+        api_key_input = AUTO_GEMINI_API_KEY
+    else:
+        api_key_input = st.text_input("Gemini API Key 입력", type="password", help="자동 설정된 키가 없을 경우 수동 입력")
+
     uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"])
     
     # HTML 파싱 처리
@@ -172,14 +197,14 @@ if 'selected_label' not in st.session_state:
     st.session_state.selected_label = "전과목 평균"
 
 # ==========================================
-# 4. 메인 화면 (스크린 오른쪽 큰 화면)
+# 5. 메인 화면 (밝은 색상 제목 반영)
 # ==========================================
 
-# 상단 헤더
+# 2. 제목 "천명의선택 학생부 NAVI" 밝은 색상 적용
 st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
 
-# 메인 최상단 1: 희망 전공/학과 및 전형 선택 (2컬럼)
+# 메인 최상단: 희망 전공/학과 및 전형 선택 (2컬럼)
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
@@ -216,7 +241,6 @@ with tab1:
     
     st.markdown("<br>", unsafe_allow_html=True)
     
-    # 3개 항목 수평 배치
     c1, c2, c3 = st.columns(3)
     
     with c1:
@@ -290,7 +314,7 @@ with tab2:
     
     if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary"):
         if not api_key_input:
-            st.warning("⚠️ 사이드바의 Gemini API 키를 입력해주시면 대학 1~2학년 수준의 AI 심화 보고서를 자동 생성합니다.")
+            st.warning("⚠️ Gemini API 키가 감지되지 않았습니다. 사이드바에 API 키를 입력해 주세요.")
         else:
             try:
                 import google.generativeai as genai
