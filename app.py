@@ -21,7 +21,7 @@ st.markdown("""
     .main-header { 
         font-size: 2.3rem; 
         font-weight: 800; 
-        color: #38BDF8; /* 밝은 아쿠아 블루 계열로 조정 */
+        color: #38BDF8; /* 밝은 아쿠아 블루 계열 */
         margin-bottom: 0.3rem; 
         text-shadow: 0px 2px 4px rgba(0,0,0,0.3);
     }
@@ -44,7 +44,6 @@ st.markdown("""
 # ==========================================
 # 1. API 키 자동 로드 로직 (구글 Gemini)
 # ==========================================
-# Streamlit Secrets 또는 환경 변수에서 자동 감지
 AUTO_GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
 # ==========================================
@@ -151,29 +150,31 @@ class NEISParserAndEngine:
         return round(gpa_all, 2), round(gpa_core, 2)
 
 # ==========================================
-# 4. 사이드바 (맨 왼쪽): 학생 정보 & 초기화 버튼
+# 4. 사이드바 (초기화 및 입력 위젯)
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
     
-    # 1. 초기화 버튼
-    if st.button("🔄 데이터 및 설정 초기화", use_container_width=True, type="secondary"):
+    # 🔄 완벽 초기화 함수 정의
+    def reset_all():
         for key in list(st.session_state.keys()):
             del st.session_state[key]
-        st.rerun()
+
+    # 1. 완벽 초기화 버튼
+    st.button("🔄 데이터 및 설정 초기화", on_click=reset_all, use_container_width=True, type="secondary")
 
     st.markdown("---")
     
-    student_name = st.text_input("학생 이름", value="허지안")
+    student_name = st.text_input("학생 이름", value="허지안", key="input_student_name")
     
-    # 3. Gemini API Key 자동 적용 안내 및 수동 수정을 위한 폴백
+    # Gemini API Key 자동 적용 안내 및 수동 수정을 위한 폴백
     if AUTO_GEMINI_API_KEY:
         st.success("🤖 Gemini AI API 키가 시스템에 자동 연동되었습니다.")
         api_key_input = AUTO_GEMINI_API_KEY
     else:
-        api_key_input = st.text_input("Gemini API Key 입력", type="password", help="자동 설정된 키가 없을 경우 수동 입력")
+        api_key_input = st.text_input("Gemini API Key 입력", type="password", key="input_api_key", help="자동 설정된 키가 없을 경우 수동 입력")
 
-    uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"])
+    uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"], key="file_uploader_html")
     
     # HTML 파싱 처리
     if uploaded_file is not None:
@@ -197,23 +198,25 @@ if 'selected_label' not in st.session_state:
     st.session_state.selected_label = "전과목 평균"
 
 # ==========================================
-# 5. 메인 화면 (밝은 색상 제목 반영)
+# 5. 메인 화면
 # ==========================================
 
-# 2. 제목 "천명의선택 학생부 NAVI" 밝은 색상 적용
+# 메인 헤더
 st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
 
-# 메인 최상단: 희망 전공/학과 및 전형 선택 (2컬럼)
+# 메인 최상단: 희망 전공/학과 및 전형 선택 (Key 부여)
 col_top1, col_top2 = st.columns(2)
 
 with col_top1:
-    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0)
+    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0, key="select_major")
 
 with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
-        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"]
+        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
+        index=0,
+        key="select_admission"
     )
 
 is_rural = "농어촌" in admission_mode
@@ -272,7 +275,8 @@ with tab1:
             max_value=9.00, 
             value=st.session_state.selected_gpa, 
             step=0.01,
-            label_visibility="collapsed"
+            label_visibility="collapsed",
+            key="input_manual_gpa"
         )
         if st.button("확인", key="btn_manual", use_container_width=True):
             st.session_state.selected_gpa = round(manual_input_val, 2)
@@ -312,7 +316,7 @@ with tab2:
 
     st.markdown("---")
     
-    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary"):
+    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key="btn_run_ai"):
         if not api_key_input:
             st.warning("⚠️ Gemini API 키가 감지되지 않았습니다. 사이드바에 API 키를 입력해 주세요.")
         else:
