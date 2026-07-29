@@ -60,6 +60,10 @@ def force_reset():
 
 r_id = st.session_state.reset_count
 
+# AI 분석 결과 캐싱을 위한 세션 변수 초기화
+if 'ai_analysis_result' not in st.session_state:
+    st.session_state.ai_analysis_result = None
+
 # ==========================================
 # 3. 세분화된 전공 / 학과 리스트 정의 (자율전공 포함)
 # ==========================================
@@ -391,7 +395,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (st.status 실시간 진행형 전환으로 멈춤 원천 해결)
+# TAB 2: 3대 역량 세특 정밀 분석 (세션 상태 기반 비동기 안정형 렌더링)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -417,6 +421,7 @@ with tab2:
 
     st.markdown("---")
     
+    # 버튼 클릭 시 세션 상태에 플래그를 두거나 직접 실행
     if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}"):
         if not api_key_input:
             st.error("⚠️ Gemini API 키가 입력되지 않았거나 연동되지 않았습니다. 사이드바를 확인해 주세요.")
@@ -440,26 +445,28 @@ with tab2:
 3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
 4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
-            # st.status를 사용하여 멈춤 현상(무한 스피너)을 원천 차단하고 상태 시각화
-            with st.status("🚀 AI 정밀 심화 분석 파이프라인 가동 중...", expanded=True) as status:
+            # 안정적인 통신을 위한 예외 핸들링 구조
+            with st.spinner("🧠 AI가 분석 보고서를 생성하는 중입니다. 잠시만 기다려주세요..."):
                 try:
-                    st.write("🔄 구글 제미나이 AI 서버와 통신 연결 중...")
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    st.write("🧠 학생부 세특 데이터 및 희망 전공 심층 연계 분석 중...")
+                    # API 호출
                     res = model.generate_content(prompt)
                     
-                    if res and res.text:
-                        status.update(label="✅ 심화 분석 보고서 생성 완료!", state="complete", expanded=False)
-                        st.markdown(res.text)
+                    if res and hasattr(res, 'text') and res.text:
+                        st.session_state.ai_analysis_result = res.text
                     else:
-                        status.update(label="⚠️ AI 응답 생성 실패", state="error", expanded=True)
-                        st.error("⚠️ AI 응답이 비어있습니다. API 키 상태를 확인해 주세요.")
+                        st.error("⚠️ AI로부터 응답을 받지 못했습니다. API 키 상태를 확인해 주세요.")
                 except Exception as e:
-                    status.update(label="❌ 통신 오류 발생", state="error", expanded=True)
-                    st.error(f"❌ API 통신 중 오류가 발생했습니다: {str(e)}")
+                    st.error(f"❌ AI 통신 중 오류가 발생했습니다: {str(e)}")
+
+    # 저장된 결과가 있으면 화면에 출력
+    if st.session_state.ai_analysis_result:
+        st.markdown("---")
+        st.markdown("### 📋 AI 정밀 심화 분석 결과")
+        st.markdown(st.session_state.ai_analysis_result)
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
