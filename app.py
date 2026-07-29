@@ -4,6 +4,7 @@ import re
 import pandas as pd
 import streamlit as st
 from bs4 import BeautifulSoup
+import google.generativeai as genai
 
 # ==========================================
 # 0. 페이지 기본 설정 및 디자인
@@ -15,7 +16,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# 커스텀 CSS
+# 커스텀 CSS (UI/UX 개선 및 반응형 디자인)
 st.markdown("""
 <style>
     .main-header { 
@@ -38,6 +39,15 @@ st.markdown("""
         border: 1px solid #334155;
         margin-bottom: 1rem;
     }
+    .section-title {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #F1F5F9;
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        border-left: 5px solid #38BDF8;
+        padding-left: 0.5rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -47,448 +57,113 @@ st.markdown("""
 AUTO_GEMINI_API_KEY = st.secrets.get("GEMINI_API_KEY", os.environ.get("GEMINI_API_KEY", ""))
 
 # ==========================================
-# 2. 초기화 상태 관리
+# 2. 초기화 상태 관리 (세션 안전성 확보)
 # ==========================================
 if 'reset_count' not in st.session_state:
     st.session_state.reset_count = 0
 
+if 'parsed_data' not in st.session_state:
+    st.session_state.parsed_data = None
+
+if 'gpa_data' not in st.session_state:
+    st.session_state.gpa_data = None
+
 def force_reset():
+    """세션 상태를 완전히 초기화하는 안전한 리셋 함수"""
     for key in list(st.session_state.keys()):
         if key != 'reset_count':
             del st.session_state[key]
     st.session_state.reset_count += 1
-
-r_id = st.session_state.reset_count
-
-# ==========================================
-# 3. 세분화된 전공 / 학과 리스트 정의
-# ==========================================
-MAJOR_CATEGORIES = {
-    "--- 선택하세요 ---": ["-"],
-    "--- 자연과학 / 공학 / IT ---": [
-        "인공지능학과 / AI학부", "컴퓨터공학과", "소프트웨어전공", "데이터사이언스학과", 
-        "전자공학과", "전기공학과", "기계공학과", "화학공학과", "신소재공학과", "도시공학과"
-    ],
-    "--- 의약학 / 수의 / 생명 ---": [
-        "수의예과", "의예과", "치의예과", "한의예과", "약학과", "간호학과", 
-        "생명과학과", "생명공학과", "화공생명공학과", "바이오시스템공학과"
-    ],
-    "--- 인문 / 어학 ---": [
-        "국어국문학과", "영어영문학과", "사학과", "철학과", "외국어문학부", "문헌정보학과"
-    ],
-    "--- 사회 / 상경 / 언론 ---": [
-        "심리학과", "경영학과", "경제학과", "사회학과", "정치외교학과", 
-        "신문방송학과 / 미디어커뮤니케이션", "행정학과", "사회복지학과"
-    ],
-    "--- 사범 / 교육 ---": [
-        "교육학과", "초등교육과 (교대)", "국어교육과", "영어교육과", "수학교육과", "컴퓨터교육과"
-    ],
-    "--- 예체능 ---": [
-        "디자인학과", "회화과", "음악학과", "체육학과", "연극영화과"
-    ]
-}
-
-FLAT_MAJOR_LIST = []
-for cat, majors in MAJOR_CATEGORIES.items():
-    FLAT_MAJOR_LIST.extend(majors)
+    st.rerun()
 
 # ==========================================
-# 4. 전문 입시 프로그램 100% 일치형 초정밀 NEIS 파서 엔진
+# 3. 데이터 파싱 함수 (HTML / TXT 범용 지원)
 # ==========================================
-class NEISParserAndEngine:
-    @staticmethod
-    def parse_neis_html(html_content):
-        soup = BeautifulSoup(html_content, 'html.parser')
-        subjects_data = []
-        parsed_name = ""
+def parse_student_record(file_content, is_html=True):
+    """
+    학생부 파일에서 교과 성적 및 세부능력 및 특기사항(세특)을 정교하게 추출합니다.
+    """
+    subjects = []
+    activities_text = ""
 
-        # 학생 이름 자동 파싱
-        for tag in soup.find_all(['td', 'th', 'span', 'div', 'p']):
-            txt = tag.get_text(strip=True)
-            m = re.search(r'성\s*명\s*[:：]\s*([가-힣]{2,5})', txt)
-            if m:
-                parsed_name = m.group(1)
-                break
-            m2 = re.search(r'([가-힣]{2,5})\s*님', txt)
-            if m2 and m2.group(1) not in ['선생', '관리자', '사용자']:
-                parsed_name = m2.group(1)
-                break
+    if is_html:
+        soup = BeautifulSoup(file_content, 'html.parser')
+        # 전체 텍스트 추출 (자연어 분석 및 세특 키워드 추출용)
+        activities_text = soup.get_text(separator="\n")
 
-        # 교과학습발달상황 테이블 정밀 스캔
+        # 성적 테이블 파싱 시도 (나이스 표준 테이블 매칭 패턴)
         tables = soup.find_all('table')
-        
         for table in tables:
             rows = table.find_all('tr')
-            if not rows:
-                continue
-
             for row in rows:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
-                if len(cols) < 4:
-                    continue
-
-                row_str = " ".join(cols)
-                if any(h in row_str for h in ['원점수', '과목명', '석차등급', '이수단위', '과목', '교과']):
-                    continue
-
-                sub_name = ""
-                unit = None
-                rank = None
-
-                # 과목명 추출 (한글 포함 텍스트)
-                for col in cols:
-                    if not sub_name and re.search(r'[가-힣]{2,}', col):
-                        if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균', '공통', '일반', '진로']):
-                            sub_name = col
-                            break
-
-                # 예체능, 교양, 진로선택(석차등급 없는 과목) 제외
-                if not sub_name or any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
-                    continue
-
-                # 이수단위(1~8) 및 석차등급(1~9 정수) 정밀 스캔
-                for col in cols:
-                    if unit is None and re.match(r'^[1-8]$', col):
-                        unit = float(col)
+                # 성적 구조 [교과, 과목, 단위수, 원점수, 과목평균, 표준편차, 석차등급] 형태 탐색
+                if len(cols) >= 5:
+                    unit_match = re.search(r'\d+', cols[2]) if len(cols) > 2 else None
+                    grade_match = re.search(r'\d+', cols[-1]) if len(cols) > 0 else None
                     
-                    # 1~9 정수 등급 패턴 (괄호 동석차 포함)
-                    m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+(?:/\d+)?\s*\))?\s*$', col)
-                    if m_r and unit is not None and col != str(int(unit)):
-                        rank = float(m_r.group(1))
+                    if unit_match and grade_match:
+                        try:
+                            unit = int(unit_match.group())
+                            grade = int(grade_match.group())
+                            if 1 <= grade <= 9:  # 유효한 석차등급 범위 검증
+                                subject_name = cols[1]
+                                subjects.append({"subject": subject_name, "unit": unit, "grade": grade})
+                        except ValueError:
+                            pass
+    else:
+        # 일반 텍스트 파일 처리
+        activities_text = file_content
+        # 정규식을 이용해 "과목명 [단위수] 등급" 형태의 패턴 매칭 시도
+        pattern = r'([가-힣a-zA-Z0-9\s]+)\s*\[(\d+)단위\]\s*(\d+)등급'
+        matches = re.findall(pattern, file_content)
+        for match in matches:
+            try:
+                subjects.append({
+                    "subject": match[0].strip(),
+                    "unit": int(match[1]),
+                    "grade": int(match[2])
+                })
+            except ValueError:
+                pass
 
-                if unit is not None and rank is not None:
-                    # 국영수과사 여부 판별
-                    is_core = not any(ex in sub_name for ex in ['정보', '컴퓨터', '제2외국어', '한문', '보건', '환경', '교양', '제2'])
-                    subjects_data.append({
-                        'subject': sub_name,
-                        'unit': unit,
-                        'grade': rank,
-                        'is_core': is_core
-                    })
-
-        # 박지환 학생 파일 정밀 보정 (실제 THE PATH4 분석표 전교과 3.41 / 국영수과사 3.26 일치)
-        if "박지환" in html_content or parsed_name == "박지환":
-            return {
-                "student_name": "박지환",
-                "scores": [{'subject': '국어', 'unit': 10, 'grade': 3}, {'subject': '수학', 'unit': 10, 'grade': 3}, {'subject': '영어', 'unit': 10, 'grade': 2}, {'subject': '사회', 'unit': 10, 'grade': 3}, {'subject': '과학', 'unit': 10, 'grade': 4}],
-                "seteuk": {"교과탐구": "도시공간 및 사회과학적 현상을 수학적 모형과 연계하여 탐구함."}
-            }
-
-        # 세특 텍스트 파싱
-        seteuk_dict = {}
-        sections = soup.find_all(['p', 'div', 'td', 'span'])
-        for sec in sections:
-            txt = sec.get_text(strip=True)
-            if len(txt) > 40 and "세부능력" not in txt and "학교생활기록" not in txt:
-                seteuk_dict["교과탐구"] = seteuk_dict.get("교과탐구", "") + " " + txt
-
-        return {"student_name": parsed_name, "scores": subjects_data, "seteuk": seteuk_dict}
-
-    @staticmethod
-    def calculate_gpas_professional(score_info):
-        if not score_info:
-            return 0.0, 0.0
-            
-        df = pd.DataFrame(score_info)
-        df = df[df['grade'].between(1, 9)].drop_duplicates()
-        
-        if df.empty:
-            return 0.0, 0.0
-
-        tot_units = df['unit'].sum()
-        if tot_units == 0:
-            return 0.0, 0.0
-        weighted_sum = (df['grade'] * df['unit']).sum()
-        gpa_all = round(weighted_sum / tot_units, 2)
-
-        core_df = df[df['is_core'] == True]
-        if core_df.empty:
-            gpa_core = gpa_all
-        else:
-            core_units = core_df['unit'].sum()
-            if core_units == 0:
-                gpa_core = gpa_all
-            else:
-                core_weighted = (core_df['grade'] * core_df['unit']).sum()
-                gpa_core = round(core_weighted / core_units, 2)
-
-        return gpa_all, gpa_core
+    df_gpa = pd.DataFrame(subjects) if subjects else pd.DataFrame(columns=["subject", "unit", "grade"])
+    return df_gpa, activities_text
 
 # ==========================================
-# 5. 사이드바 UI
+# 4. 학과별 핵심 키워드 사전 및 매칭 알고리즘
 # ==========================================
-with st.sidebar:
-    st.header("⚙️ 분석 설정 및 데이터 입력")
-    
-    st.button("🔄 전체 데이터 초기화", on_click=force_reset, use_container_width=True, type="secondary", key=f"btn_reset_side_{r_id}")
+MAJOR_KEYWORDS = {
+    "컴퓨터교육과/컴퓨터공학과": ["컴퓨터", "정보", "교육", "코딩", "프로그래밍", "알고리즘", "수업", "교사", "디지털", "소프트웨어", "AI", "인공지능", "데이터"],
+    "디자인학과": ["디자인", "시각", "공간", "제품", "창의", "조형", "색채", "그래픽", "사용자", "콘텐츠", "미술", "UX/UI"],
+    "회화과": ["회화", "미술", "예술", "표현", "창작", "색채", "재료", "작가", "작품", "전시", "드로잉", "유화"],
+    "음악학과": ["음악", "연주", "작곡", "이론", "예술", "악기", "성악", "음향", "창작", "감상", "클래식", "오케스트라"],
+    "체육학과": ["체육", "운동", "스포츠", "건강", "생리", "훈련", "지도", "신체", "역학", "교육", "트레이닝"],
+    "연극영화과": ["연극", "영화", "영상", "연기", "연출", "시나리오", "제작", "카메라", "무대", "예술", "시네마", "대본"]
+}
 
-    st.markdown("---")
-    
-    st.markdown("""
-    <script>
-        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
-        inputs.forEach(input => input.setAttribute('autocomplete', 'off'));
-    </script>
-    """, unsafe_allow_html=True)
-
-    student_name_input = st.text_input("학생 이름", value="", placeholder="학생 이름을 입력하세요", key=f"name_{r_id}")
-    
-    if AUTO_GEMINI_API_KEY:
-        st.success("🤖 Gemini AI API 키가 시스템에 자동 연동되었습니다.")
-        api_key_input = AUTO_GEMINI_API_KEY
-    else:
-        api_key_input = st.text_input("Gemini API Key 입력", type="password", key=f"key_{r_id}", help="자동 설정된 키가 없을 경우 수동 입력")
-
-    uploaded_file = st.file_uploader("NEIS 성적/세특 HTML 파일 업로드", type=["html", "htm"], key=f"file_{r_id}")
-    
-    if uploaded_file is not None:
-        html_content = uploaded_file.read().decode('utf-8', errors='ignore')
-        parsed_data = NEISParserAndEngine.parse_neis_html(html_content)
-        
-        if student_name_input.strip():
-            display_student = student_name_input.strip()
-        elif parsed_data["student_name"]:
-            display_student = parsed_data["student_name"]
-        else:
-            display_student = "학생"
-            
-        st.success(f"✅ {display_student} 학생 파일 파싱 완료")
-        gpa_all_calc, gpa_core_calc = NEISParserAndEngine.calculate_gpas_professional(parsed_data['scores'])
-        
-        if display_student == "박Z환" or display_student == "박지환":
-            gpa_all_calc, gpa_core_calc = 3.41, 3.26
-    else:
-        parsed_data = {"student_name": "", "scores": [], "seteuk": {}}
-        gpa_all_calc, gpa_core_calc = 0.0, 0.0
-        display_student = student_name_input.strip() if student_name_input.strip() else "미입력"
-
-    if 'selected_gpa' not in st.session_state:
-        st.session_state.selected_gpa = gpa_all_calc if gpa_all_calc > 0 else 0.0
-    if 'selected_label' not in st.session_state:
-        st.session_state.selected_label = "미선택"
-
-    all_text = " ".join(parsed_data['seteuk'].values()) if parsed_data['seteuk'] else ""
-    if uploaded_file is not None and st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
-        curr_gpa = st.session_state.selected_gpa
-        eval_academic = "중상 (Above Avg)" if curr_gpa >= 3.0 else "상상 (Top)" if curr_gpa <= 1.70 else "상중 (Very High)"
-        eval_career = "상상 (Top)" if any(k in all_text for k in ["도시", "건축", "공학", "설계", "공간", "지리", "환경"]) else "상중 (Very High)"
-        eval_comm = "상상 (Top)"
-    else:
-        eval_academic = "-"
-        eval_career = "-"
-        eval_comm = "-"
-
-    st.markdown("---")
-    st.markdown("### 📌 파싱 산출 내신 요약")
-    if uploaded_file is not None and gpa_all_calc > 0:
-        st.write(f"- **전과목 평균**: {gpa_all_calc:.2f} 등급")
-        st.write(f"- **국영수과사 평균**: {gpa_core_calc:.2f} 등급")
-    else:
-        st.write("- **전과목 평균**: 0.00 등급")
-        st.write("- **국영수과사 평균**: 0.00 등급")
-
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("### 📊 3대 역량 세특 정밀 분석")
-    st.write(f"- **학업**: [ {eval_academic} ]")
-    st.write(f"- **진로**: [ {eval_career} ]")
-    st.write(f"- **공동체**: [ {eval_comm} ]")
+def calculate_keyword_score(text, keywords):
+    """학생부 내 전공 적합성 키워드의 빈도를 분석합니다."""
+    if not text:
+        return 0, []
+    matched = []
+    score = 0
+    for kw in keywords:
+        count = len(re.findall(re.escape(kw), text))
+        if count > 0:
+            matched.append((kw, count))
+            score += count
+    return score, sorted(matched, key=lambda x: x[1], reverse=True)
 
 # ==========================================
-# 6. 메인 화면 UI
+# 5. 메인 레이아웃 및 웹 인터페이스 구성
 # ==========================================
-
 st.markdown('<div class="main-header">🧭 천명의선택 학생부 NAVI</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">NEIS 정밀 분석 | 전형별 맞춤 산출 | 3대 역량 세특 진단 | 입결 예측 엔진</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">AI 기반 학생부 종합 분석 및 전공 적합성 진단 프로그램</div>', unsafe_allow_html=True)
 
-col_btn1, col_btn2 = st.columns([1, 4])
-with col_btn1:
-    st.button("🔄 메인 설정 및 평가 초기화", on_click=force_reset, use_container_width=True, type="secondary", key=f"btn_reset_main_{r_id}")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-col_top1, col_top2 = st.columns(2)
-
-with col_top1:
-    selected_major = st.selectbox("🎯 희망 전공/학과 선택", FLAT_MAJOR_LIST, index=0, key=f"major_{r_id}")
-
-with col_top2:
-    admission_mode = st.selectbox(
-        "📋 주력 전형 선택",
-        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
-        index=0,
-        key=f"admission_{r_id}"
-    )
-
-is_rural = "농어촌" in admission_mode
-
-if selected_major != "-" and admission_mode != "-":
-    if is_rural:
-        st.info("🌾 **농어촌 특별전형 알고리즘 적용 중**: 소수 이수 과목 우대 및 농어촌 전용 입결 기준 반영")
-    else:
-        st.info("🏛️ **일반전형 분석 알고리즘 적용 중**: 정규 Z-Score 및 통상 학종/교과 입결 기준 반영")
-
-st.divider()
-
-tab1, tab2, tab3 = st.tabs([
-    "📊 ① 교과 성적 기준 등급 선택", 
-    "📝 ② 3대 역량 세특 정밀 분석", 
-    f"🎯 ③ [{display_student}] 학생부 종합 입시 분석"
-])
-
-# ------------------------------------------
-# TAB 1: 교과 성적 기준 등급 선택
-# ------------------------------------------
-with tab1:
-    st.subheader("📊 교과 성적 산출 및 기준 등급 확정")
-    st.caption("아래 3가지 항목 중 원하는 등급의 **[확인]** 단추를 누르면, 해당 등급이 전체 입시 분석의 기준 등급으로 확정됩니다.")
+# 사이드바 패널
+with st.sidebar:
+    st.header("⚙️ 설정 및 입력")
     
-    st.markdown("<br>", unsafe_allow_html=True)
-    
-    c1, c2, c3 = st.columns(3)
-    
-    with c1:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.markdown("### 1) 전과목")
-        if gpa_all_calc > 0:
-            st.markdown(f"# **{gpa_all_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-        else:
-            st.markdown("# **0.00** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-            
-        if st.button("확인", key=f"btn_all_{r_id}", use_container_width=True):
-            st.session_state.selected_gpa = gpa_all_calc
-            st.session_state.selected_label = "전과목 평균"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with c2:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.markdown("### 2) 국영수과사")
-        if gpa_core_calc > 0:
-            st.markdown(f"# **{gpa_core_calc:.2f}** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-        else:
-            st.markdown("# **0.00** <span style='font-size:1.2rem;'>등급</span>", unsafe_allow_html=True)
-            
-        if st.button("확인", key=f"btn_core_{r_id}", use_container_width=True):
-            st.session_state.selected_gpa = gpa_core_calc
-            st.session_state.selected_label = "국영수과사 평균"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with c3:
-        st.markdown('<div class="metric-container">', unsafe_allow_html=True)
-        st.markdown("### 3) 수기 입력")
-        manual_input_val = st.number_input(
-            "나의 등급 직접 입력", 
-            min_value=1.00, 
-            max_value=9.00, 
-            value=float(st.session_state.selected_gpa) if st.session_state.selected_gpa > 0 else 1.00, 
-            step=0.01,
-            label_visibility="collapsed",
-            key=f"manual_{r_id}"
-        )
-        if st.button("확인", key=f"btn_manual_{r_id}", use_container_width=True):
-            st.session_state.selected_gpa = round(manual_input_val, 2)
-            st.session_state.selected_label = "수기 입력 등급"
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-    if st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
-        st.success(f"✅ 현재 전체 분석에 적용된 기준 등급: **{st.session_state.selected_label} [{st.session_state.selected_gpa:.2f} 등급]**")
-    else:
-        st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
-
-# ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석
-# ------------------------------------------
-with tab2:
-    st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
-    
-    if st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
-        st.caption(f"확정된 기준 등급: **{st.session_state.selected_label} ({st.session_state.selected_gpa:.2f}등급)**")
-    else:
-        st.caption("확정된 기준 등급: **-**")
-    
-    ca1, ca2, ca3 = st.columns(3)
-    with ca1:
-        st.markdown("**📘 학업역량**")
-        st.info(f"🏆 **{eval_academic}**")
-        st.caption(f"기준 등급 {st.session_state.selected_gpa:.2f} 반영 산출" if st.session_state.selected_gpa > 0 else "-")
-    with ca2:
-        st.markdown("**📗 진로역량**")
-        st.info(f"🏆 **{eval_career}**")
-        st.caption(f"{selected_major} 연계 세특 깊이 반영" if st.session_state.selected_gpa > 0 else "-")
-    with ca3:
-        st.markdown("**📙 공동체역량**")
-        st.info(f"🏆 **{eval_comm}**")
-        st.caption("리더십 및 나눔·배려 종합 평가" if st.session_state.selected_gpa > 0 else "-")
-
-    st.markdown("---")
-    
-    if st.button("🚀 세특 정밀 심화 분석 실행 (Gemini API 연동)", type="primary", key=f"run_ai_{r_id}"):
-        if not api_key_input:
-            st.error("⚠️ Gemini API 키가 입력되지 않았거나 연동되지 않았습니다. 사이드바를 확인해 주세요.")
-        elif st.session_state.selected_gpa == 0:
-            st.warning("⚠️ 학생부 파일 업로드 및 [확인] 단추로 기준 등급을 먼저 확정해 주세요.")
-        else:
-            prompt_text = all_text[:2000] if len(all_text) > 2000 else all_text
-            
-            prompt = f"""
-당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
-다음 학생의 확정 기준 등급({st.session_state.selected_gpa:.2f}등급) 및 세특 원문을 바탕으로 [{selected_major}] 전공 진학 시 학업/진로/공동체 역량을 대학 1~2학년 수준으로 정밀하게 심화 평가해 주세요.
-
-[기준 등급]: {st.session_state.selected_gpa:.2f} 등급 ({st.session_state.selected_label})
-[희망 학과]: {selected_major}
-[세특 원문 요약]:
-{prompt_text}
-
-[작성 가이드]:
-1. **학업역량**: 교과 지식의 깊이, 수리적/과학적 탐구 과정 및 보완점
-2. **진로역량**: {selected_major} 전공과의 구체적 연계 탐구 실적 평가
-3. **공동체역량**: 협동, 나눔, 리더십 실천 사례
-4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
-"""
-            with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
-                try:
-                    import google.generativeai as genai
-                    genai.configure(api_key=api_key_input)
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    res = model.generate_content(prompt)
-                    if res and res.text:
-                        st.markdown(res.text)
-                    else:
-                        st.error("⚠️ AI 응답 생성에 실패했습니다. API 키 상태 및 네트워크 연결을 확인해 주세요.")
-                except Exception as e:
-                    st.error(f"❌ AI 분석 중 오류가 발생했습니다: {str(e)}")
-
-# ------------------------------------------
-# TAB 3: 종합 입시 분석 보고서
-# ------------------------------------------
-with tab3:
-    st.subheader(f"📝 [{display_student}] 학생 학생부 종합 입시 분석 보고서")
-    
-    curr_gpa_txt = f"{st.session_state.selected_gpa:.2f}등급" if st.session_state.selected_gpa > 0 else "-"
-    st.info(f"**진단 전형**: **{admission_mode}** | **목표 학과**: **{selected_major}** | **적용 기준 등급**: **{st.session_state.selected_label} ({curr_gpa_txt})**")
-    
-    col_s1, col_s2 = st.columns(2)
-    
-    with col_s1:
-        st.markdown("### 📌 학업 & 진로 역량 분석")
-        st.markdown(f"""
-        * **확정 교과 성적**: 선택된 기준 등급 **{curr_gpa_txt}**을 토대로 정밀 평가 수행.
-        * **학업 역량 부합성**: `{selected_major}` 전공 합격을 위한 주요 권장 교과군 성적 성취도 분석.
-        * **전공 적합성**: 심화 Seteuk 텍스트 분석 결과, 수학적·공학적/인문학적 개념을 수리 모델링으로 연계한 고차원 탐구 역량 검증.
-        """)
-
-    with col_s2:
-        st.markdown("### 🌾 공동체 역량 & 전형 전략 분석")
-        if is_rural:
-            st.markdown(f"""
-            * **농어촌 전형 특화 우대**: 소수 수강 인원 과목 우대 보정을 적용하여 실질 경쟁력 상향.
-            * **합격 예측**: **{curr_gpa_txt}** 기준, 최상위권 대학 농어촌 학종/교과 지원 시 높은 적합성을 보임.
-            """)
-        else:
-            st.markdown(f"""
-            * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
-            * **합격 예측**: **{curr_gpa_txt}** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
-            """)
+    # 1. API 키 검증 및 입력 구조 보안 강화
+    api_key = AUTO_GEMINI_API_KEY
