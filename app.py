@@ -100,7 +100,7 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 4. 범용 표준 NEIS HTML 초정밀 파싱 & 내신 계산 엔진
+# 4. 범용 NEIS HTML 표 컬럼 자동매핑 내신 파싱 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -109,41 +109,81 @@ class NEISParserAndEngine:
         subjects_data = []
         parsed_name = ""
 
-        # 학생 이름 자동 파싱 (HTML 상단 성명 영역 추출)
-        name_tag = soup.find(string=re.compile(r'성\s*명\s*:|\b성명\b'))
-        if name_tag and name_tag.parent:
-            parent_text = name_tag.parent.get_text()
-            m_name = re.search(r'성\s*명\s*:\s*([가-힣]{2,5})', parent_text)
-            if m_name:
-                parsed_name = m_name.group(1)
+        # 1. 학생 이름 자동 파싱
+        for tag in soup.find_all(['td', 'th', 'span', 'div', 'p']):
+            txt = tag.get_text(strip=True)
+            m = re.search(r'성\s*명\s*[:：]\s*([가-힣]{2,5})', txt)
+            if m:
+                parsed_name = m.group(1)
+                break
+            m2 = re.search(r'([가-힣]{2,5})\s*님', txt)
+            if m2 and m2.group(1) not in ['선생', '관리자', '사용자']:
+                parsed_name = m2.group(1)
+                break
 
-        # 교과학습발달상황 테이블 파싱
+        # 2. 교과학습발달상황 테이블 파싱
         tables = soup.find_all('table')
         
         for table in tables:
             rows = table.find_all('tr')
+            if not rows:
+                continue
+
+            # 표 헤더에서 '과목', '단위수', '석차등급' 컬럼 위치 파악
+            unit_idx = -1
+            rank_idx = -1
+            sub_idx = -1
+
+            for r in rows:
+                header_cols = [td.get_text(strip=True).replace(" ", "") for td in r.find_all(['td', 'th'])]
+                for i, c in enumerate(header_cols):
+                    if ('과목' in c or '교과' in c) and sub_idx == -1:
+                        sub_idx = i
+                    elif '단위' in c:
+                        unit_idx = i
+                    elif '석차' in c or '등급' in c:
+                        rank_idx = i
+
+            # 데이터 행 파싱
             for row in rows:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
-                if len(cols) >= 5:
-                    sub_name = cols[0] if len(cols) > 0 else ""
-                    
-                    # 체육, 예술, 교양, P/F, 성취도 평가 과목 자동 제외
-                    if any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군', '성취도']):
-                        continue
-                    
-                    unit = None
-                    rank = None
-                    
-                    # 단위수(1~8) 및 석차등급(1~9 정수) 위치 기반 정밀 추출
+                if len(cols) < 4:
+                    continue
+
+                row_str = " ".join(cols)
+                if '원점수' in row_str or '과목' in row_str or '석차등급' in row_str or '단위수' in row_str:
+                    continue
+
+                sub_name = ""
+                unit = None
+                rank = None
+
+                # 헤더 위치 기반 정밀 추출
+                if sub_idx >= 0 and sub_idx < len(cols):
+                    sub_name = cols[sub_idx]
+                if unit_idx >= 0 and unit_idx < len(cols):
+                    if re.match(r'^[1-8]$', cols[unit_idx]):
+                        unit = float(cols[unit_idx])
+                if rank_idx >= 0 and rank_idx < len(cols):
+                    m_rank = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', cols[rank_idx])
+                    if m_rank:
+                        rank = float(m_rank.group(1))
+
+                # 위치 탐색 미적용 시 유동적 스캔
+                if unit is None or rank is None or not sub_name:
                     for col in cols:
+                        if not sub_name and re.search(r'[가-힣]{2,}', col):
+                            if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균']):
+                                sub_name = col
                         if unit is None and re.match(r'^[1-8]$', col):
                             unit = float(col)
-                        elif unit is not None and rank is None:
-                            m = re.match(r'^([1-9])(?:\s*\([0-9/]+\))?$', col)
-                            if m:
-                                rank = float(m.group(1))
+                        m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', col)
+                        if m_r and unit is not None and col != str(int(unit)):
+                            rank = float(m_r.group(1))
 
-                    if unit is not None and rank is not None:
+                # 예체능, P/F, 진로선택(성취도만 존재) 제외
+                if sub_name and unit is not None and rank is not None:
+                    if not any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
                         subjects_data.append({
                             'subject': sub_name,
                             'unit': unit,
@@ -152,7 +192,7 @@ class NEISParserAndEngine:
 
         # 세특 텍스트 파싱
         seteuk_dict = {}
-        sections = soup.find_all(['p', 'div', 'td'])
+        sections = soup.find_all(['p', 'div', 'td', 'span'])
         for sec in sections:
             txt = sec.get_text(strip=True)
             if len(txt) > 40 and "세부능력" not in txt and "학교생활기록" not in txt:
@@ -242,7 +282,7 @@ with st.sidebar:
     if uploaded_file is not None and st.session_state.selected_gpa > 0 and st.session_state.selected_label != "미선택":
         curr_gpa = st.session_state.selected_gpa
         eval_academic = "상상 (Top)" if curr_gpa <= 1.70 else "상중 (Very High)" if curr_gpa <= 2.20 else "중상 (Above Avg)"
-        eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망", "인공지능", "수의", "의학", "생명", "임상", "세포", "바이오"]) else "상중 (Very High)"
+        eval_career = "상상 (Top)" if any(k in all_text for k in ["경사하강법", "미분", "선형회귀", "분석", "신경망", "인공지능", "수의", "의학", "생명", "임상", "세포", "바이오", "도시", "건축"]) else "상중 (Very High)"
         eval_comm = "상상 (Top)"
     else:
         eval_academic = "-"
@@ -300,7 +340,7 @@ if selected_major != "-" and admission_mode != "-":
 
 st.divider()
 
-# display_student 변수를 탭 선언 전에 먼저 정의
+# 탭 구성 (display_student 변수 사전 할당으로 NameError 완벽 방지)
 tab1, tab2, tab3 = st.tabs([
     "📊 ① 교과 성적 기준 등급 선택", 
     "📝 ② 3대 역량 세특 정밀 분석", 
@@ -371,7 +411,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석
+# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 직결 연동)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -403,7 +443,7 @@ with tab2:
         elif st.session_state.selected_gpa == 0:
             st.warning("⚠️ 학생부 파일 업로드 및 [확인] 단추로 기준 등급을 먼저 확정해 주세요.")
         else:
-            prompt_text = all_text[:2000] if len(all_text) > 2000 else all_text
+            prompt_text = all_text[:2500] if len(all_text) > 2500 else all_text
             
             prompt = f"""
 당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
@@ -421,28 +461,17 @@ with tab2:
 4. **3학년 심화 권장 방향**: 대학 1~2학년 수준의 구체적 탐구 주제 제안
 """
             with st.spinner("AI가 정밀 심화 분석 보고서를 생성하고 있습니다..."):
-                analysis_success = False
-                model_candidates = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-2.0-flash-exp']
-                
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
-                    
-                    for model_name in model_candidates:
-                        try:
-                            model = genai.GenerativeModel(model_name)
-                            res = model.generate_content(prompt)
-                            if res and res.text:
-                                st.markdown(res.text)
-                                analysis_success = True
-                                break
-                        except Exception:
-                            continue
-                            
-                    if not analysis_success:
-                        st.error("⚠️ AI 모델 호출 실패. 구글 API 키 권한 또는 네트워크 상태를 확인해 주세요.")
-                except Exception as ex:
-                    st.error(f"❌ API 통신 오류: {str(ex)}")
+                    model = genai.GenerativeModel('gemini-1.5-flash')
+                    res = model.generate_content(prompt)
+                    if res and res.text:
+                        st.markdown(res.text)
+                    else:
+                        st.error("⚠️ AI 응답 생성에 실패했습니다. API 키 상태 및 네트워크 연결을 확인해 주세요.")
+                except Exception as e:
+                    st.error(f"❌ AI 분석 중 오류가 발생했습니다: {str(e)}")
 
 # ------------------------------------------
 # TAB 3: 종합 입시 분석 보고서
