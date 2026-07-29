@@ -96,7 +96,7 @@ for cat, majors in MAJOR_CATEGORIES.items():
     FLAT_MAJOR_LIST.extend(majors)
 
 # ==========================================
-# 4. 전문 입시 프로그램 일치형 초정밀 NEIS 파서 엔진
+# 4. 범용 NEIS HTML 파서 엔진
 # ==========================================
 class NEISParserAndEngine:
     @staticmethod
@@ -105,7 +105,6 @@ class NEISParserAndEngine:
         subjects_data = []
         parsed_name = ""
 
-        # 학생 이름 자동 파싱
         for tag in soup.find_all(['td', 'th', 'span', 'div', 'p']):
             txt = tag.get_text(strip=True)
             m = re.search(r'성\s*명\s*[:：]\s*([가-힣]{2,5})', txt)
@@ -117,13 +116,26 @@ class NEISParserAndEngine:
                 parsed_name = m2.group(1)
                 break
 
-        # 교과학습발달상황 테이블 파싱
         tables = soup.find_all('table')
         
         for table in tables:
             rows = table.find_all('tr')
             if not rows:
                 continue
+
+            unit_idx = -1
+            rank_idx = -1
+            sub_idx = -1
+
+            for r in rows:
+                header_cols = [td.get_text(strip=True).replace(" ", "") for td in r.find_all(['td', 'th'])]
+                for i, c in enumerate(header_cols):
+                    if ('과목' in c or '교과' in c) and sub_idx == -1:
+                        sub_idx = i
+                    elif '단위' in c:
+                        unit_idx = i
+                    elif '석차' in c or '등급' in c:
+                        rank_idx = i
 
             for row in rows:
                 cols = [td.get_text(strip=True) for td in row.find_all(['td', 'th'])]
@@ -138,32 +150,37 @@ class NEISParserAndEngine:
                 unit = None
                 rank = None
 
-                for col in cols:
-                    if not sub_name and re.search(r'[가-힣]{2,}', col):
-                        if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균', '공통', '일반']):
-                            sub_name = col
-                            break
+                if sub_idx >= 0 and sub_idx < len(cols):
+                    sub_name = cols[sub_idx]
+                if unit_idx >= 0 and unit_idx < len(cols):
+                    if re.match(r'^[1-8]$', cols[unit_idx]):
+                        unit = float(cols[unit_idx])
+                if rank_idx >= 0 and rank_idx < len(cols):
+                    m_rank = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', cols[rank_idx])
+                    if m_rank:
+                        rank = float(m_rank.group(1))
 
-                if not sub_name or any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
-                    continue
+                if unit is None or rank is None or not sub_name:
+                    for col in cols:
+                        if not sub_name and re.search(r'[가-힣]{2,}', col):
+                            if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균', '공통', '일반']):
+                                sub_name = col
+                        if unit is None and re.match(r'^[1-8]$', col):
+                            unit = float(col)
+                        m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', col)
+                        if m_r and unit is not None and col != str(int(unit)):
+                            rank = float(m_r.group(1))
 
-                for col in cols:
-                    if unit is None and re.match(r'^[1-8]$', col):
-                        unit = float(col)
-                    m_r = re.search(r'^\s*([1-9])\s*(?:\(\s*\d+\s*\))?\s*$', col)
-                    if m_r and unit is not None and col != str(int(unit)):
-                        rank = float(m_r.group(1))
+                if sub_name and unit is not None and rank is not None:
+                    if not any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
+                        is_core = not any(ex in sub_name for ex in ['정보', '컴퓨터', '제2외국어', '한문', '보건', '환경', '교양'])
+                        subjects_data.append({
+                            'subject': sub_name,
+                            'unit': unit,
+                            'grade': rank,
+                            'is_core': is_core
+                        })
 
-                if unit is not None and rank is not None:
-                    is_core = not any(ex in sub_name for ex in ['정보', '컴퓨터', '제2외국어', '한문', '보건', '환경', '교양'])
-                    subjects_data.append({
-                        'subject': sub_name,
-                        'unit': unit,
-                        'grade': rank,
-                        'is_core': is_core
-                    })
-
-        # 세특 텍스트 파싱
         seteuk_dict = {}
         sections = soup.find_all(['p', 'div', 'td', 'span'])
         for sec in sections:
@@ -204,7 +221,7 @@ class NEISParserAndEngine:
         return gpa_all, gpa_core
 
 # ==========================================
-# 5. 사이드바 UI
+# 5. 사이드바 UI (브라우저 자동완성 차단 추가)
 # ==========================================
 with st.sidebar:
     st.header("⚙️ 분석 설정 및 데이터 입력")
@@ -213,6 +230,14 @@ with st.sidebar:
 
     st.markdown("---")
     
+    # HTML 속성 주입을 통한 브라우저 자동완성 원천 차단
+    st.markdown("""
+    <script>
+        const inputs = window.parent.document.querySelectorAll('input[type="text"]');
+        inputs.forEach(input => input.setAttribute('autocomplete', 'off'));
+    </script>
+    """, unsafe_allow_html=True)
+
     student_name_input = st.text_input("학생 이름", value="", placeholder="학생 이름을 입력하세요", key=f"name_{r_id}")
     
     if AUTO_GEMINI_API_KEY:
@@ -378,7 +403,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (타임아웃 및 무한 대기 방지 보완)
+# TAB 2: 3대 역량 세특 정밀 분석
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -431,7 +456,6 @@ with tab2:
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
-                    # 표준 1.5-flash 모델 적용
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     res = model.generate_content(prompt)
                     if res and res.text:
