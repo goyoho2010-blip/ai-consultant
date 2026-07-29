@@ -138,18 +138,15 @@ class NEISParserAndEngine:
                 unit = None
                 rank = None
 
-                # 과목명 추출 (한글 포함 텍스트)
                 for col in cols:
                     if not sub_name and re.search(r'[가-힣]{2,}', col):
                         if not any(k in col for k in ['학기', '학년', '수강', '이수', '성취', '원점수', '평균', '공통', '일반']):
                             sub_name = col
                             break
 
-                # 체육, 예술, 교양, 진로선택 과목(성취도만 있는 경우) 제외
                 if not sub_name or any(ex in sub_name for ex in ['체육', '음악', '미술', '운동', '스포츠', '진로', '교양', '군']):
                     continue
 
-                # 단위수(1~8) 및 석차등급(1~9 정수) 추출
                 for col in cols:
                     if unit is None and re.match(r'^[1-8]$', col):
                         unit = float(col)
@@ -158,7 +155,6 @@ class NEISParserAndEngine:
                         rank = float(m_r.group(1))
 
                 if unit is not None and rank is not None:
-                    # 국영수과사 및 기타 과목 전체 수용 (전문 프로그램의 '전교과' 및 '국영수과사' 정산 방식과 동기화)
                     is_core = not any(ex in sub_name for ex in ['정보', '컴퓨터', '제2외국어', '한문', '보건', '환경', '교양'])
                     subjects_data.append({
                         'subject': sub_name,
@@ -179,7 +175,6 @@ class NEISParserAndEngine:
 
     @staticmethod
     def calculate_gpas_professional(score_info):
-        """전문 입시 프로그램(THE PATH4) 분석표와 100% 일치하는 가중평균 산출 공식"""
         if not score_info:
             return 0.0, 0.0
             
@@ -189,14 +184,12 @@ class NEISParserAndEngine:
         if df.empty:
             return 0.0, 0.0
 
-        # 1. 전교과 석차등급 평균 (이수단위 가중치 반영)
         tot_units = df['unit'].sum()
         if tot_units == 0:
             return 0.0, 0.0
         weighted_sum = (df['grade'] * df['unit']).sum()
         gpa_all = round(weighted_sum / tot_units, 2)
 
-        # 2. 국영수과사 평균 (전문 프로그램 기준에 맞춰 핵심 교과군 반영)
         core_df = df[df['is_core'] == True]
         if core_df.empty:
             gpa_core = gpa_all
@@ -300,7 +293,7 @@ with col_top1:
 with col_top2:
     admission_mode = st.selectbox(
         "📋 주력 전형 선택",
-        ["농어촌 특별전형 (학생부종합/교과)", "일반전형 (학생부종합/교과)"],
+        ["일반전형 (학생부종합/교과)", "농어촌 특별전형 (학생부종합/교과)"],
         index=0,
         key=f"admission_{r_id}"
     )
@@ -385,7 +378,7 @@ with tab1:
         st.warning("⚠️ 학생부 HTML 파일을 업로드하거나 [확인] 단추를 눌러 기준 등급을 확정해 주세요.")
 
 # ------------------------------------------
-# TAB 2: 3대 역량 세특 정밀 분석 (Gemini 안정 연동)
+# TAB 2: 3대 역량 세특 정밀 분석 (타임아웃 및 무한 대기 방지 보완)
 # ------------------------------------------
 with tab2:
     st.subheader(f"📊 [{selected_major}] 기준 3대 역량 정밀 자동 평가")
@@ -417,7 +410,7 @@ with tab2:
         elif st.session_state.selected_gpa == 0:
             st.warning("⚠️ 학생부 파일 업로드 및 [확인] 단추로 기준 등급을 먼저 확정해 주세요.")
         else:
-            prompt_text = all_text[:2500] if len(all_text) > 2500 else all_text
+            prompt_text = all_text[:2000] if len(all_text) > 2000 else all_text
             
             prompt = f"""
 당신은 대한민국 최고 수준의 대입 입시 컨설턴트입니다.
@@ -438,6 +431,7 @@ with tab2:
                 try:
                     import google.generativeai as genai
                     genai.configure(api_key=api_key_input)
+                    # 표준 1.5-flash 모델 적용
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     res = model.generate_content(prompt)
                     if res and res.text:
@@ -478,4 +472,3 @@ with tab3:
             * **일반전형 정규 평가**: 전국 단위 학종/교과 통상 평가 기준 적용.
             * **합격 예측**: **{curr_gpa_txt}** 기준, 목표 대학 입결 컷 범위 내 안정적인 서류 정성평가 경쟁력 확보.
             """)
-
